@@ -832,10 +832,13 @@ function MetricBox({label,value,sub,warn,good,highlight}) {
   );
 }
 
-function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, trainingRuns, width, height }) {
+function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt, trainingRuns, width, height }) {
   // Each dot's threshold depends on who attacks it
   const thresholdFor = (country) => country === "China" ? usAtkThreshold : country === "US" || country === "Ally" ? cnAtkThreshold : 1e11;
   const strikeDateFor = (country) => country === "China" ? usAtkStrikeDate : country === "US" || country === "Ally" ? cnAtkStrikeDate : NOW;
+  const preemptFor = (country) => country === "China" ? usAtkPreempt : country === "US" || country === "Ally" ? cnAtkPreempt : false;
+  // A cluster is "sab" if above threshold AND (existing before strike OR preempt is on)
+  const isSab = (pt) => pt.gpus >= thresholdFor(pt.country) && (pt.year <= strikeDateFor(pt.country) + 0.05 || preemptFor(pt.country));
 
   const starPath = (cx, cy, r) => {
     const pts = 4, inner = r * 0.38;
@@ -851,9 +854,9 @@ function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshol
   const hoveredChain = hovered !== null && points[hovered].chain >= 0 ? points[hovered].chain : null;
   const sabChains = useMemo(() => {
     const s = new Set();
-    points.forEach(pt => { if(pt.chain >= 0 && pt.gpus >= thresholdFor(pt.country)) s.add(pt.chain); });
+    points.forEach(pt => { if(pt.chain >= 0 && isSab(pt)) s.add(pt.chain); });
     return s;
-  }, [points, usAtkThreshold, cnAtkThreshold]);
+  }, [points, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt]);
   const mg = { top:25, right:30, bottom:50, left:70 };
   const w = width-mg.left-mg.right, h = height-mg.top-mg.bottom;
   const xMin=2021, xMax=2031, yMin=800, yMax=200000000;
@@ -933,7 +936,7 @@ function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshol
 
           {points.map((pt,i)=>{
             const cx=xS(pt.year), cy=yS(pt.gpus);
-            const sab=pt.gpus>=thresholdFor(pt.country);
+            const sab=isSab(pt);
             const chainSab = pt.chain >= 0 && sabChains.has(pt.chain);
             const targeted = sab || chainSab;
             const est=pt.name.includes("[EST]");
@@ -992,7 +995,7 @@ function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshol
             const pt=points[hovered];
             const cx=xS(pt.year),jy=((hovered*7+hovered*hovered*3)%9-4)*1.2;
             const cy=yS(pt.gpus)+jy;
-            const sab=pt.gpus>=thresholdFor(pt.country);
+            const sab=isSab(pt);
             const chainSab2 = pt.chain >= 0 && sabChains.has(pt.chain) && !sab;
             const est=pt.name.includes("[EST]");
             const sabCol2=pt.country==="US"?"#ef4444":pt.country==="China"?"#f97316":pt.country==="Ally"?"#16a34a":"#7c3aed";
@@ -1415,11 +1418,13 @@ function App() {
   const [usAtkStrikeDate, setUsAtkStrikeDate] = useState(2029.0 + 7/365);
   const [usAtkEnabled, setUsAtkEnabled] = useState(true);
   const [usAtkSC, setUsAtkSC] = useState(true);
+  const [usAtkPreempt, setUsAtkPreempt] = useState(true);
   // China attacking US parameters (first strike)
   const [cnAtkThreshold, setCnAtkThreshold] = useState(1000000);
   const [cnAtkStrikeDate, setCnAtkStrikeDate] = useState(2029.0);
   const [cnAtkEnabled, setCnAtkEnabled] = useState(true);
   const [cnAtkSC, setCnAtkSC] = useState(true);
+  const [cnAtkPreempt, setCnAtkPreempt] = useState(true);
 
   const [flopExp, setFlopExp] = useState(33);
   const [eta, setEta] = useState(0.43);
@@ -1587,7 +1592,7 @@ function App() {
     // US baseline company compute function (no nat, no attack) - used as diffusion reference
     const usBaselineCompanyFn = (t) => usBaselineTimeline(t) * getCompanyShareOfNational(t);
 
-    const computeStats = (country, natEnabled, natDate, effThreshold, effStrikeDate, scActive, countryDiffusion, diffusionRefFn) => {
+    const computeStats = (country, natEnabled, natDate, effThreshold, effStrikeDate, scActive, countryDiffusion, diffusionRefFn, preempt) => {
       // === BASELINE: uses original (unreduced) data ===
       const all = points.filter(pt=>pt.country===country);
 
@@ -1626,10 +1631,12 @@ function App() {
       const scSites = Object.values(scSiteMap);
 
       // Hit detection uses SC-adjusted sizes.
-      const hitSites = scSites.filter(s => s.maxGpus >= effThreshold);
-      const disabledSites = hitSites.filter(s => s.maxExistingGpus >= effThreshold);
-      const preemptedSites = hitSites.filter(s => s.maxExistingGpus < effThreshold);
-      const survivingSites = scSites.filter(s => s.maxGpus < effThreshold);
+      const disabledSites = scSites.filter(s => s.maxExistingGpus >= effThreshold);
+      const preemptedSites = preempt ? scSites.filter(s => s.maxGpus >= effThreshold && s.maxExistingGpus < effThreshold) : [];
+      const survivingSites = preempt
+        ? scSites.filter(s => s.maxGpus < effThreshold)
+        : scSites.filter(s => s.maxExistingGpus < effThreshold);
+      const hasHits = disabledSites.length > 0 || preemptedSites.length > 0;
 
       const disabledGPUs = disabledSites.reduce((s,site) => s + site.maxExistingGpus, 0);
       const preemptedGPUs = preemptedSites.reduce((s,site) => s + site.maxGpus, 0);
@@ -1691,7 +1698,6 @@ function App() {
       }
 
       // === ATTACK SCENARIO: three branches based on strike timing ===
-      const hasHits = hitSites.length > 0;
       let earliestDone = Infinity, bestCluster = null, bestStrategy = "", attackStart = null;
       let attackPreEnd = null, scenario = "none", fractionAtStrike = 0;
 
@@ -1798,14 +1804,14 @@ function App() {
     };
 
     // Compute US first so we can extract its actual company compute for CN diffusion
-    const usS = computeStats("US", usNatEnabled, usNatDate, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null);
+    const usS = computeStats("US", usNatEnabled, usNatDate, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt);
     // CN's diffusion reference = what the US actually achieves (including nat + attack effects)
     const usActualCompanyFn = usS._attackCompanyFn;
-    const cnS = computeStats("China", cnNatEnabled, cnNatDate, effUsAtkThreshold, effUsAtkStrikeDate, usAtkSCActive, diffusion, usActualCompanyFn);
-    const allyS = computeStats("Ally", false, 2050, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null);
-    const otherS = computeStats("Other", false, 2050, 1e11, NOW, false, 0, null);
+    const cnS = computeStats("China", cnNatEnabled, cnNatDate, effUsAtkThreshold, effUsAtkStrikeDate, usAtkSCActive, diffusion, usActualCompanyFn, usAtkPreempt);
+    const allyS = computeStats("Ally", false, 2050, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt);
+    const otherS = computeStats("Other", false, 2050, 1e11, NOW, false, 0, null, false);
     return { usS, cnS, allyS, otherS };
-  }, [points, scPoints, effUsAtkThreshold, effUsAtkStrikeDate, effCnAtkThreshold, effCnAtkStrikeDate, usAtkSCActive, cnAtkSCActive, fEff, rate, alpha, p, eta, u, usNatEnabled, usNatDate, cnNatEnabled, cnNatDate, alloc, diffusion]);
+  }, [points, scPoints, effUsAtkThreshold, effUsAtkStrikeDate, effCnAtkThreshold, effCnAtkStrikeDate, usAtkSCActive, cnAtkSCActive, usAtkPreempt, cnAtkPreempt, fEff, rate, alpha, p, eta, u, usNatEnabled, usNatDate, cnNatEnabled, cnNatDate, alloc, diffusion]);
 
 
 
@@ -2004,6 +2010,7 @@ function App() {
                 threshold: usAtkThreshold, setThreshold: setUsAtkThreshold,
                 sd: usAtkStrikeDate, setSd: setUsAtkStrikeDate,
                 sc: usAtkSC, setSc: setUsAtkSC,
+                preempt: usAtkPreempt, setPreempt: setUsAtkPreempt,
                 nat: { label: "CN Nationalization", enabled: cnNatEnabled, setEnabled: setCnNatEnabled, date: cnNatDate, setDate: setCnNatDate, color: "#d97706" },
               },
               { label: "China strikes US", color: "#d97706", borderColor: "#d9770622",
@@ -2011,6 +2018,7 @@ function App() {
                 threshold: cnAtkThreshold, setThreshold: setCnAtkThreshold,
                 sd: cnAtkStrikeDate, setSd: setCnAtkStrikeDate,
                 sc: cnAtkSC, setSc: setCnAtkSC,
+                preempt: cnAtkPreempt, setPreempt: setCnAtkPreempt,
                 nat: { label: "US Nationalization", enabled: usNatEnabled, setEnabled: setUsNatEnabled, date: usNatDate, setDate: setUsNatDate, color: "#3b82f6" },
               },
             ].map(atk => (
@@ -2052,6 +2060,14 @@ function App() {
                   </label>
                   <div style={{ fontSize:9, color:"#475569", fontFamily:"var(--f)", marginBottom:6, paddingLeft:16, lineHeight:1.3 }}>
                     Includes strikes on chip fabs and suppliers, reducing future buildout by 90%.
+                  </div>
+                  <label style={{ fontSize:10, color: atk.preempt ? "#a78bfa" : "#64748b", fontFamily:"var(--f)", textTransform:"uppercase", letterSpacing:0.5, display:"flex", alignItems:"center", gap:5, cursor:"pointer", marginBottom:2 }}>
+                    <input type="checkbox" checked={atk.preempt} onChange={e=>atk.setPreempt(e.target.checked)}
+                      style={{ accentColor:"#a78bfa", width:11, height:11, cursor:"pointer" }} />
+                    Continuous denial
+                  </label>
+                  <div style={{ fontSize:9, color:"#475569", fontFamily:"var(--f)", marginBottom:6, paddingLeft:16, lineHeight:1.3 }}>
+                    {atk.preempt ? "Planned clusters above threshold are also prevented from being built." : "Strike once only: existing clusters destroyed, but future builds proceed."}
                   </div>
                   <div style={{ marginTop:6 }}>
                     <label style={{ fontSize:10, color: atk.nat.enabled ? atk.nat.color : "#64748b", fontFamily:"var(--f)", textTransform:"uppercase", letterSpacing:0.5, display:"flex", alignItems:"center", gap:5, cursor:"pointer", marginBottom:3 }}>
@@ -2242,6 +2258,7 @@ function App() {
           <Chart points={scPoints} chainLinks={chainLinks} chainMembers={chainMembers}
             usAtkThreshold={effUsAtkThreshold} cnAtkThreshold={effCnAtkThreshold}
             usAtkStrikeDate={effUsAtkStrikeDate} cnAtkStrikeDate={effCnAtkStrikeDate}
+            usAtkPreempt={usAtkPreempt} cnAtkPreempt={cnAtkPreempt}
             trainingRuns={[
               { ...usS, country: "US", color: "#3b82f6" },
               { ...cnS, country: "China", color: "#d97706" },
