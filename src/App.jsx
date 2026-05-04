@@ -2,7 +2,16 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 
 // Flask backend URL (AIFP Python model). MAIM posts strike-modified compute
 // timelines and receives the resulting software-progress curve per scenario.
-const AIFP_BACKEND_URL = "http://127.0.0.1:5328/api/maim-trajectory";
+// Auto-switches: localhost dev hits local Flask; public deploy hits Render.
+const AIFP_BACKEND_URL = (() => {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://127.0.0.1:5328/api/maim-trajectory";
+    }
+  }
+  return "https://aifp-backend.onrender.com/api/maim-trajectory";
+})();
 
 // Build a log-space interpolator from a backend trajectory, keyed on time.
 function makeLogInterp(tArr, valArr) {
