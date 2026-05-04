@@ -1855,12 +1855,12 @@ export default function App() {
   // === Default scenario: China first-strikes to prevent US TED-AI ===
   // US retaliatory strike, 1 month after CN
   const [usAtkThreshold, setUsAtkThreshold] = useState(500000);
-  const [usAtkStrikeDate, setUsAtkStrikeDate] = useState(2031.0 + 1/12);
+  const [usAtkStrikeDate, setUsAtkStrikeDate] = useState(2031.0);
   const [usAtkEnabled, setUsAtkEnabled] = useState(true);
   const [usAtkPreempt, setUsAtkPreempt] = useState(true);
   // China first strike
   const [cnAtkThreshold, setCnAtkThreshold] = useState(500000);
-  const [cnAtkStrikeDate, setCnAtkStrikeDate] = useState(2031.0 + 1/12);
+  const [cnAtkStrikeDate, setCnAtkStrikeDate] = useState(2031.0);
   const [cnAtkEnabled, setCnAtkEnabled] = useState(true);
   const [cnAtkPreempt, setCnAtkPreempt] = useState(true);
 
