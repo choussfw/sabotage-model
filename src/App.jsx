@@ -2895,11 +2895,8 @@ export default function App() {
                   search comes from AIFP's Python backend (full dynamics including automation
                   feedback). */}
               <div style={{ marginTop:6, marginBottom:8, padding:"8px 10px", background:"rgba(15,23,42,0.6)", border:"1px solid #1e293b", borderRadius:6 }}>
-                <div style={{ fontSize:10, color:"#94a3b8", fontFamily:"var(--f)", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6, display:"flex", gap:8, alignItems:"baseline" }}>
-                  <span>Training-run completion: baseline vs post-strike</span>
-                  <span style={{ textTransform:"none", fontSize:9, color:"#64748b", letterSpacing:0, fontWeight:400 }}>
-                    {useAifpBackend && backendStatus === "connected" ? "" : "using local algo-multiplier"}
-                  </span>
+                <div style={{ fontSize:10, color:"#94a3b8", fontFamily:"var(--f)", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6 }}>
+                  Training-run completion: baseline vs post-strike
                 </div>
                 <table style={{ width:"100%", fontSize:11, fontFamily:"var(--f)", borderCollapse:"collapse" }}>
                   <thead>
