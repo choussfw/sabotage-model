@@ -3022,6 +3022,20 @@ export default function App() {
                     {/* Loading bar fills asymptotically toward 95% during the request,
                         then snaps to 100% on completion and fades. */}
                     <LoadingBar isLoading={isLoading} />
+                    <div style={{
+                      marginTop: 10,
+                      fontSize: 11,
+                      color: "#94a3b8",
+                      fontFamily: "var(--f)",
+                      lineHeight: 1.55,
+                    }}>
+                      <div style={{ fontWeight: 600, color: "#cbd5e1", marginBottom: 4 }}>Instructions:</div>
+                      <ol style={{ margin: 0, paddingLeft: 18 }}>
+                        <li>Set target strike dates, strategies, and sabotage threshold.</li>
+                        <li>Select capability threshold to deter.</li>
+                        <li>Refresh model manually above for updated results.</li>
+                      </ol>
+                    </div>
                   </div>
                 );
               })()}
