@@ -3029,6 +3029,11 @@ export default function App() {
                       fontFamily: "var(--f)",
                       lineHeight: 1.55,
                     }}>
+                      {typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1" && (
+                        <div style={{ fontStyle: "italic", color: "#64748b", marginBottom: 6 }}>
+                          (First request may take ~30 seconds while the backend wakes up.)
+                        </div>
+                      )}
                       <div style={{ fontWeight: 600, color: "#cbd5e1", marginBottom: 4 }}>Instructions:</div>
                       <ol style={{ margin: 0, paddingLeft: 18 }}>
                         <li>Set target strike dates, strategies, and sabotage threshold.</li>
