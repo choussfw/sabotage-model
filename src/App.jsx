@@ -1973,10 +1973,9 @@ export default function App() {
   const usSCTargets = T
     ? Math.round(6 + Math.max(0, cnAtkStrikeDate - 2026) / 2)
     : 0;
-  // China target count: 7 today (2026), +1 every 2 years as Chinese AI-fab buildout continues.
-  // Captures new SMIC, Hua Hong, CXMT, and packaging fab additions per the Big Fund pipeline.
+  // China target count: 4 today (2026), +1 every 2 years (matches US scaling rate).
   const cnSCTargets = D
-    ? Math.round(7 + Math.max(0, usAtkStrikeDate - 2026) / 2)
+    ? Math.round(4 + Math.max(0, usAtkStrikeDate - 2026) / 2)
     : 0;
   // Fix: if US attack is off but SC blowback hits China (via TSMC), use TSMC date for timing
   const effUsAtkStrikeDateSC = usAtkEnabled ? effUsAtkStrikeDate : (usAtkSCActive ? cnSCStrikeDate : NOW);
@@ -2899,7 +2898,7 @@ export default function App() {
                 <div style={{ fontSize:10, color:"#94a3b8", fontFamily:"var(--f)", textTransform:"uppercase", letterSpacing:0.5, marginBottom:6, display:"flex", gap:8, alignItems:"baseline" }}>
                   <span>Training-run completion: baseline vs post-strike</span>
                   <span style={{ textTransform:"none", fontSize:9, color:"#64748b", letterSpacing:0, fontWeight:400 }}>
-                    {useAifpBackend && backendStatus === "connected" ? "using AIFP backend algo-multiplier" : "using local algo-multiplier"}
+                    {useAifpBackend && backendStatus === "connected" ? "" : "using local algo-multiplier"}
                   </span>
                 </div>
                 <table style={{ width:"100%", fontSize:11, fontFamily:"var(--f)", borderCollapse:"collapse" }}>
@@ -2968,7 +2967,7 @@ export default function App() {
               {useAifpBackend && showAifpOverrides && (
                 <div style={{ marginBottom:10, padding:"8px 10px", background:"rgba(15,23,42,0.5)", border:"1px dashed #334155", borderRadius:6 }}>
                   <div style={{ fontSize:10, color:"#94a3b8", fontFamily:"var(--f)", marginBottom:6, lineHeight:1.4 }}>
-                    Override key AIFP parameters on top of the preset. Leave blank to inherit. These change the <em>date</em> at which a given-size training run completes, not the FLOP target itself.
+                    Override key AI Futures Algorithmic forecast parameters on top of the preset. Leave blank to inherit.
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:8 }}>
                     {[
@@ -3078,8 +3077,8 @@ export default function App() {
                 preempt: usAtkPreempt, setPreempt: setUsAtkPreempt,
                 nat: { label: "CN Nationalization", enabled: cnNatEnabled, setEnabled: setCnNatEnabled, date: cnNatDate, setDate: setCnNatDate, color: "#d97706" },
                 scToggles: [
-                  { label: "Strikes on SMIC and CXMT", checked: usStrikeCnFabs, set: setUsStrikeCnFabs, extra: `(+${Math.round(7 + Math.max(0, usAtkStrikeDate - 2026) / 2)} fabs)`,
-                    hint: "Destroy SMIC, CXMT, and other domestic Chinese leading-edge fabs. Target count starts at 7 today and grows by 1 every 2 years per the Big Fund buildout. Cuts ~48% of CN new builds." },
+                  { label: "Strikes on SMIC and CXMT", checked: usStrikeCnFabs, set: setUsStrikeCnFabs, extra: `(+${Math.round(4 + Math.max(0, usAtkStrikeDate - 2026) / 2)} fabs)`,
+                    hint: "Destroy SMIC and CXMT fabs in China. China loses ~46% of new builds initially, recovering to pre-strike rate over 7 years." },
                 ],
                 scSummary: (() => {
                   const immediate = cnSCFactor;
@@ -3098,7 +3097,7 @@ export default function App() {
                 nat: { label: "US Nationalization", enabled: usNatEnabled, setEnabled: setUsNatEnabled, date: usNatDate, setDate: setUsNatDate, color: "#3b82f6" },
                 scToggles: [
                   { label: "Strikes on TSMC Taiwan and Arizona", checked: tsmcDestroyed, set: setTsmcDestroyed, extra: `(+${Math.round(6 + Math.max(0, cnAtkStrikeDate - 2026) / 2)} fabs)`,
-                    hint: "Destroy TSMC fabs in Taiwan + Arizona. US loses 95% of new builds initially, recovering at ~5pp/year. China loses ~52% (blowback: smuggling and offshore remote-access compute both depend on TSMC chip flow)." },
+                    hint: "Destroy TSMC fabs in Taiwan + Arizona. US loses ~95% of new builds initially, recovering to pre-strike rate over 7 years. China loses ~49% (blowback: smuggling and offshore remote-access compute both depend on TSMC chip flow)." },
                 ],
                 scSummary: (() => {
                   const us = `US new builds: ${(usSCFactor*100).toFixed(0)}% \u2192 100% over 7y`;
@@ -3116,8 +3115,8 @@ export default function App() {
                   {atk.label}
                 </label>
                 <div style={{ opacity: atk.enabled ? 1 : 0.3, pointerEvents: atk.enabled ? "auto" : "none" }}>
-                  <Slider label="Sabotage threshold"
-                    hint="Clusters at or above this size are targeted."
+                  <Slider label="Sabotage threshold (H100-equivalents)"
+                    hint="Clusters at or above this size (in H100e) are targeted."
                     value={atk.threshold>=1e11?100000000:atk.threshold} onChange={atk.setThreshold}
                     min={1000} max={100000000} step={1000} logScale format={v=>atk.threshold>=1e11?"OFF":F(v)} />
                   <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:-4, marginBottom:8 }}>
@@ -3378,7 +3377,7 @@ export default function App() {
         <div style={{ marginTop: 24, marginBottom: 8 }}>
           <span style={{ fontSize: 11, letterSpacing: 2, color: "#6366f1", textTransform: "uppercase", fontWeight: 600 }}>Compute Projections</span>
           <p style={{ fontSize: 12, color: "#475569", margin: "4px 0 16px 0", lineHeight: 1.5 }}>
-            Based on AI Futures Project compute forecasts.
+            Based on AI Futures Project Compute and Software Efficiency Forecasts.
           </p>
         </div>
 
@@ -3506,7 +3505,7 @@ export default function App() {
                 return (
                   <ProjectionChart
                     title="Algorithmic Efficiency Multiplier"
-                    subtitle={(useAifpBackend && backendStatus === "connected") ? "AIFP backend (semi-endogenous growth, accelerates with compute)" : (rate > 0 ? `${halvingMonths}-month halving local model (${rate.toFixed(2)} OOM/yr present-day)` : "No algorithmic improvement")}
+                    subtitle={(useAifpBackend && backendStatus === "connected") ? "" : (rate > 0 ? `${halvingMonths}-month halving local model (${rate.toFixed(2)} OOM/yr present-day)` : "No algorithmic improvement")}
                     series={series}
                     xMin={2024} xMax={2040} yMin={0.8} yMax={Math.pow(10, Math.ceil(Math.log10(Math.max(maxVal, 2))))}
                     logY width={400} height={320}
@@ -3580,7 +3579,7 @@ export default function App() {
                 return (
                   <ProjectionChart
                     title="Algorithmic Progress Rate"
-                    subtitle={useBackend ? "AIFP software-efficiency rate (OOM/yr at each month)" : "Yearly software-efficiency growth rate (local model, OOM/yr)"}
+                    subtitle={useBackend ? "Software-efficiency rate (OOM/yr at each month)" : "Yearly software-efficiency growth rate (local model, OOM/yr)"}
                     series={series}
                     xMin={2024} xMax={2040} yMin={0} yMax={yMax}
                     width={400} height={320}
@@ -3613,7 +3612,7 @@ export default function App() {
               return (
                 <ProjectionChart
                   title="United States Compute"
-                  subtitle={usNatEnabled ? `Nationalized ${Math.floor(usNatDate)} (90% of national)` : "Leading company (79.9% of global)"}
+                  subtitle={usNatEnabled ? `Nationalized ${Math.floor(usNatDate)} (90% of national)` : "79.9% of global compute"}
                   series={[
                     { data: projections.usTotalSeries, color: "#3b82f6", label: "US total", bold: true },
                     { data: projections.usLeadingSeries, color: "#60a5fa", label: usNatEnabled ? "Lead co. (nat.)" : "Leading co.", fill: "rgba(96,165,250,0.12)" },
@@ -3672,7 +3671,7 @@ export default function App() {
               return (
                 <ProjectionChart
                   title="China Compute"
-                  subtitle={cnNatEnabled ? `Nationalized ${Math.floor(cnNatDate)} (90% of national)` : "Leading company (13.8% of global)"}
+                  subtitle={cnNatEnabled ? `Nationalized ${Math.floor(cnNatDate)} (90% of national)` : "13.8% of global compute"}
                   series={[
                     { data: projections.chinaTotalSeries, color: "#d97706", label: "China total", bold: true },
                     { data: projections.chinaLeadingSeries, color: "#fbbf24", label: cnNatEnabled ? "Lead co. (nat.)" : "Leading co.", fill: "rgba(251,191,36,0.10)" },
