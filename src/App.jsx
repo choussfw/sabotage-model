@@ -1968,7 +1968,11 @@ export default function App() {
   // SC dates: TSMC follows CN strike, SMIC follows US strike
   const cnSCStrikeDate = Math.min(T ? cnAtkStrikeDate : Infinity, D ? usAtkStrikeDate : Infinity);
   // SC extra fab targets
-  const usSCTargets = T ? 4 : 0;
+  // US (TSMC) target count: 6 today (2026) — Fab 14, Fab 18, Fab 20, Fab 22, AP3, AP6 in Taiwan.
+  // +1 every 2 years as Fab 21 Arizona phases ramp and AP7 / Kumamoto / new packaging come online.
+  const usSCTargets = T
+    ? Math.round(6 + Math.max(0, cnAtkStrikeDate - 2026) / 2)
+    : 0;
   // China target count: 7 today (2026), +1 every 2 years as Chinese AI-fab buildout continues.
   // Captures new SMIC, Hua Hong, CXMT, and packaging fab additions per the Big Fund pipeline.
   const cnSCTargets = D
@@ -3093,7 +3097,7 @@ export default function App() {
                 preempt: cnAtkPreempt, setPreempt: setCnAtkPreempt,
                 nat: { label: "US Nationalization", enabled: usNatEnabled, setEnabled: setUsNatEnabled, date: usNatDate, setDate: setUsNatDate, color: "#3b82f6" },
                 scToggles: [
-                  { label: "Strikes on TSMC Taiwan and Arizona", checked: tsmcDestroyed, set: setTsmcDestroyed, extra: "(+4 fabs)",
+                  { label: "Strikes on TSMC Taiwan and Arizona", checked: tsmcDestroyed, set: setTsmcDestroyed, extra: `(+${Math.round(6 + Math.max(0, cnAtkStrikeDate - 2026) / 2)} fabs)`,
                     hint: "Destroy TSMC fabs in Taiwan + Arizona. US loses 95% of new builds initially, recovering at ~5pp/year. China loses ~52% (blowback: smuggling and offshore remote-access compute both depend on TSMC chip flow)." },
                 ],
                 scSummary: (() => {
