@@ -2749,10 +2749,105 @@ export default function App() {
       const share = origUsT > 0 ? c / origUsT : 0;
       return [yr, cnT * share];
     });
-    const usTrainingSeries = usLeadingSeries.map(([yr, v]) => [yr, v * alloc.training]);
-    const cnTrainingSeries = chinaLeadingSeries.map(([yr, v]) => [yr, v * cnAlloc.training]);
-    const usExperimentalSeries = usLeadingSeries.map(([yr, v]) => [yr, v * alloc.experimental]);
-    const cnExperimentalSeries = chinaLeadingSeries.map(([yr, v]) => [yr, v * cnAlloc.experimental]);
+    // === Sub-year refinement at strike dates ===
+    // The series above are sampled at integer years (AIFP_DATA), which smears
+    // strike-date discontinuities visually across the strike year. For Jan
+    // strikes the line drops between (year-1) and (year); for Feb-Dec strikes
+    // it drops between (year) and (year+1). Inject (strikeDate - eps) and
+    // (strikeDate) sample points so the chart shows the drop AT the strike.
+    const _refineWithStrike = (series, strikeDate, before, after) => {
+      if (!Number.isFinite(strikeDate)) return series;
+      if (before == null || after == null) return series;
+      const eps = 1e-3;
+      // Drop the integer-year point at the strike year. Its value via
+      // buildAdjusted is a mix of pre-strike growth + post-strike growth +
+      // destruction integrated over the year, which conflicts with our
+      // explicit (strikeDate-eps, baseline) and (strikeDate, after-destruction)
+      // refinement points. The line then linearly interpolates from the
+      // after-destruction point to the next integer year, which is the
+      // correct visual representation of post-strike trajectory.
+      const strikeYr = Math.floor(strikeDate);
+      const filtered = series.filter(([x]) => x !== strikeYr);
+      return [...filtered, [strikeDate - eps, before], [strikeDate, after]]
+        .sort((a, b) => a[0] - b[0]);
+    };
+    const _baselineCountryAt = (country, t) => {
+      const yrBefore = Math.floor(t);
+      const idxBefore = AIFP_DATA.findIndex(d => d[0] === yrBefore);
+      if (idxBefore < 0 || idxBefore + 1 >= AIFP_DATA.length) return null;
+      const yrAfter = AIFP_DATA[idxBefore + 1][0];
+      const sB = getCountryShares(yrBefore, txEnd)[country] || 0;
+      const sA = getCountryShares(yrAfter, txEnd)[country] || 0;
+      const valBefore = AIFP_DATA[idxBefore][1] * sB;
+      const valAfter  = AIFP_DATA[idxBefore + 1][1] * sA;
+      const frac = (t - yrBefore) / (yrAfter - yrBefore);
+      return valBefore + frac * (valAfter - valBefore);
+    };
+    const _baselineGlobalAt = (t) => {
+      const yrBefore = Math.floor(t);
+      const idxBefore = AIFP_DATA.findIndex(d => d[0] === yrBefore);
+      if (idxBefore < 0 || idxBefore + 1 >= AIFP_DATA.length) return null;
+      const yrAfter = AIFP_DATA[idxBefore + 1][0];
+      const valBefore = AIFP_DATA[idxBefore][1];
+      const valAfter  = AIFP_DATA[idxBefore + 1][1];
+      const frac = (t - yrBefore) / (yrAfter - yrBefore);
+      return valBefore + frac * (valAfter - valBefore);
+    };
+    // Refinement is applied to SEPARATE display series only. The originals
+    // (usTotalSeries, usLeadingSeries, etc.) stay aligned with AIFP_DATA's
+    // integer-year index, so adjAifpAt's indexed access remains correct for
+    // year-based stat displays like "Lead co. 2035".
+    let usTotalDisp = usTotalSeries, chinaTotalDisp = chinaTotalSeries;
+    let usLeadingDisp = usLeadingSeries, chinaLeadingDisp = chinaLeadingSeries;
+    let globalDisp = globalSeries;
+    if (cnAtkEnabled && Number.isFinite(cnAtkStrikeDate) && cnAtkStrikeDate >= 2024 && cnAtkStrikeDate <= 2040) {
+      const sd = cnAtkStrikeDate;
+      const totBefore = _baselineCountryAt("US", sd);
+      const destroyed = (usS && usS.disabledGPUs) || 0;
+      const allyDestroyed = (allyS && allyS.disabledGPUs) || 0;
+      if (totBefore != null) {
+        usTotalDisp = _refineWithStrike(usTotalDisp, sd, totBefore, Math.max(0, totBefore - destroyed));
+      }
+      const tlA = usS?._timelines?.attack;
+      if (tlA) {
+        const lb = interpTL(tlA, sd - 1e-3);
+        const la = interpTL(tlA, sd);
+        usLeadingDisp = _refineWithStrike(usLeadingDisp, sd, lb, la);
+      }
+      const gBefore = _baselineGlobalAt(sd);
+      if (gBefore != null) {
+        globalDisp = _refineWithStrike(globalDisp, sd, gBefore, Math.max(0, gBefore - destroyed - allyDestroyed));
+      }
+    }
+    if (usAtkEnabled && Number.isFinite(usAtkStrikeDate) && usAtkStrikeDate >= 2024 && usAtkStrikeDate <= 2040) {
+      const sd = usAtkStrikeDate;
+      const totBefore = _baselineCountryAt("China", sd);
+      const destroyed = (cnS && cnS.disabledGPUs) || 0;
+      if (totBefore != null) {
+        chinaTotalDisp = _refineWithStrike(chinaTotalDisp, sd, totBefore, Math.max(0, totBefore - destroyed));
+      }
+      const tlA = cnS?._timelines?.attack;
+      if (tlA) {
+        const lb = interpTL(tlA, sd - 1e-3);
+        const la = interpTL(tlA, sd);
+        chinaLeadingDisp = _refineWithStrike(chinaLeadingDisp, sd, lb, la);
+      }
+      const gBefore = _baselineGlobalAt(sd);
+      if (gBefore != null) {
+        const existing = globalDisp.find(([x]) => Math.abs(x - sd) < 1e-9);
+        const after = existing
+          ? Math.max(0, existing[1] - destroyed)
+          : Math.max(0, gBefore - destroyed);
+        globalDisp = _refineWithStrike(globalDisp, sd, gBefore, after);
+      }
+    }
+
+    // Training/experimental are display-only (no indexed access elsewhere),
+    // so we derive them from the refined leading series.
+    const usTrainingSeries = usLeadingDisp.map(([yr, v]) => [yr, v * alloc.training]);
+    const cnTrainingSeries = chinaLeadingDisp.map(([yr, v]) => [yr, v * cnAlloc.training]);
+    const usExperimentalSeries = usLeadingDisp.map(([yr, v]) => [yr, v * alloc.experimental]);
+    const cnExperimentalSeries = chinaLeadingDisp.map(([yr, v]) => [yr, v * cnAlloc.experimental]);
 
     const adjAifpAt = (year) => {
       const idx = AIFP_DATA.findIndex(([y]) => y === year);
@@ -2763,11 +2858,33 @@ export default function App() {
       return { global: g, usTotal: usT, cnTotal: cnT, usLead: usLeadingSeries[idx][1], cnLead: chinaLeadingSeries[idx][1], natShare };
     };
 
-    return { globalSeries, usTotalSeries, chinaTotalSeries, usLeadingSeries, chinaLeadingSeries, usTrainingSeries, cnTrainingSeries, usExperimentalSeries, cnExperimentalSeries,
+    // Charts read the display (refined) versions so strike-date discontinuities
+    // align with strikeDate visually. adjAifpAt (closed over above) reads the
+    // original integer-year series for stable indexed access.
+    return {
+      globalSeries: globalDisp,
+      usTotalSeries: usTotalDisp,
+      chinaTotalSeries: chinaTotalDisp,
+      usLeadingSeries: usLeadingDisp,
+      chinaLeadingSeries: chinaLeadingDisp,
+      usTrainingSeries, cnTrainingSeries, usExperimentalSeries, cnExperimentalSeries,
       baselineGlobalSeries: AIFP_DATA.map(([yr, g]) => [yr, g]),
       globalNewSeries: adjustedAIFP.slice(1).map(([yr, g], i) => [yr, g - adjustedAIFP[i][1]]),
       baselineNewSeries: AIFP_DATA.slice(1).map(([yr, g], i) => [yr, g - AIFP_DATA[i][1]]),
-      growthSeries: adjustedAIFP.slice(1).map(([yr], i) => [yr, adjustedAIFP[i + 1][1] / adjustedAIFP[i][1]]),
+      // Growth rate: annualized ratio of consecutive samples in the refined globalDisp.
+      // Sub-year refinement points around strikeDate produce a sharp dip there.
+      growthSeries: (() => {
+        const out = [];
+        for (let i = 1; i < globalDisp.length; i++) {
+          const [tPrev, vPrev] = globalDisp[i - 1];
+          const [tCur,  vCur]  = globalDisp[i];
+          if (vPrev <= 0 || tCur <= tPrev) continue;
+          const dt = tCur - tPrev;
+          const annual = Math.pow(vCur / vPrev, 1 / dt);
+          out.push([tCur, annual]);
+        }
+        return out;
+      })(),
       adjAifpAt,
     };
   }, [usNatEnabled, usNatDate, cnNatEnabled, cnNatDate, alloc, cnAlloc, usAtkSCActive, cnAtkSCActive, cnAtkStrikeDate, cnSCStrikeDate, usSCFactor, cnSCFactor, usAtkEnabled, cnAtkEnabled, usS.disabledGPUs, cnS.disabledGPUs, allyS.disabledGPUs, effUsAtkStrikeDate, effCnAtkStrikeDate]);
