@@ -1523,46 +1523,35 @@ function ProjectionChart({ title, subtitle, series, xMin, xMax, yMin, yMax, logY
             );
           })}
 
-          {/* End-of-line labels with overlap avoidance: collect natural positions,
-              sort by y, and enforce minimum vertical spacing so converging series
-              (e.g. US + CN at right edge of algo charts) don't stack on each other. */}
-          {(() => {
-            const labelInfos = [];
-            for (let si = 0; si < series.length; si++) {
-              const s = series[si];
-              const pts = s.data.filter(([x, y]) => x >= xMin && x <= xMax && (!logY || y > 0));
-              if (pts.length < 2) continue;
-              const last = pts[pts.length - 1];
-              const prev = pts[pts.length - 2];
-              const lx = xS(last[0]), ly = yS(last[1]);
-              const py = yS(prev[1]);
-              const above = ly < py;
-              labelInfos.push({
-                lx, ly,
-                naturalY: ly + (above ? -8 : 14),
-                label: s.label, color: s.color,
-              });
-            }
-            labelInfos.sort((a, b) => a.naturalY - b.naturalY);
-            const minSpacing = 13;
-            for (let i = 1; i < labelInfos.length; i++) {
-              if (labelInfos[i].naturalY < labelInfos[i - 1].naturalY + minSpacing) {
-                labelInfos[i].naturalY = labelInfos[i - 1].naturalY + minSpacing;
-              }
-            }
-            return labelInfos.map((info, i) => (
-              <text key={`lbl${i}`} x={info.lx - 4} y={info.naturalY} textAnchor="end"
-                fill={info.color} fontSize={9} fontFamily="var(--f)" opacity={0.85} fontWeight={600}>
-                {info.label}
-              </text>
-            ));
-          })()}
-
           {/* Axis labels */}
           <text x={w / 2} y={h + 38} textAnchor="middle" fill="#475569" fontSize={11} fontFamily="var(--f)">Year</text>
           {yLabel && <text x={-h / 2} y={-65} textAnchor="middle" fill="#475569" fontSize={11} fontFamily="var(--f)" transform="rotate(-90)">{yLabel}</text>}
         </g>
       </svg>
+
+      {/* Legend below the chart — replaces the small inline end-of-line tags */}
+      {series.filter(s => s.label).length > 0 && (
+        <div style={{
+          display: "flex", flexWrap: "wrap", gap: "10px 18px",
+          padding: "6px 12px 0", marginLeft: mg.left, marginRight: mg.right,
+          fontSize: 11, fontFamily: "var(--f)", color: "#cbd5e1",
+        }}>
+          {series.filter(s => s.label).map((s, i) => (
+            <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <svg width={22} height={10} style={{ flexShrink: 0 }}>
+                <line
+                  x1={1} y1={5} x2={21} y2={5}
+                  stroke={s.color}
+                  strokeWidth={s.bold ? 2.5 : 1.8}
+                  strokeDasharray={s.dashed ? "5,2" : "none"}
+                  opacity={s.dashed ? 0.7 : 0.95}
+                />
+              </svg>
+              <span style={{ color: s.color, fontWeight: s.bold ? 600 : 500 }}>{s.label}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1968,10 +1957,10 @@ export default function App() {
   // SC dates: TSMC follows CN strike, SMIC follows US strike
   const cnSCStrikeDate = Math.min(T ? cnAtkStrikeDate : Infinity, D ? usAtkStrikeDate : Infinity);
   // SC extra fab targets
-  // US (TSMC) target count: 6 today (2026) — Fab 14, Fab 18, Fab 20, Fab 22, AP3, AP6 in Taiwan.
-  // +1 every 2 years as Fab 21 Arizona phases ramp and AP7 / Kumamoto / new packaging come online.
+  // US (TSMC) target count: 8 today (2026) — leading-edge Taiwan fabs + Arizona ramp.
+  // +1 every 2 years (matches CN scaling rate) as Fab 21 Arizona / AP7 / Kumamoto / new packaging come online.
   const usSCTargets = T
-    ? Math.round(6 + Math.max(0, cnAtkStrikeDate - 2026) / 2)
+    ? Math.round(8 + Math.max(0, cnAtkStrikeDate - 2026) / 2)
     : 0;
   // China target count: 4 today (2026), +1 every 2 years (matches US scaling rate).
   const cnSCTargets = D
@@ -3221,7 +3210,7 @@ export default function App() {
                 preempt: cnAtkPreempt, setPreempt: setCnAtkPreempt,
                 nat: { label: "US Nationalization", enabled: usNatEnabled, setEnabled: setUsNatEnabled, date: usNatDate, setDate: setUsNatDate, color: "#3b82f6" },
                 scToggles: [
-                  { label: "Strikes on TSMC Taiwan and Arizona", checked: tsmcDestroyed, set: setTsmcDestroyed, extra: `(+${Math.round(6 + Math.max(0, cnAtkStrikeDate - 2026) / 2)} fabs)`,
+                  { label: "Strikes on TSMC Taiwan and Arizona", checked: tsmcDestroyed, set: setTsmcDestroyed, extra: `(+${Math.round(8 + Math.max(0, cnAtkStrikeDate - 2026) / 2)} fabs)`,
                     hint: "Destroy TSMC fabs in Taiwan + Arizona. US loses ~95% of new builds initially, recovering to pre-strike rate over 7 years. China loses ~49% (blowback: smuggling and offshore remote-access compute both depend on TSMC chip flow)." },
                 ],
                 scSummary: (() => {
