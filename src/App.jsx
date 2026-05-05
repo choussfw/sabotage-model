@@ -2207,15 +2207,26 @@ export default function App() {
       // All countries anchor to US baseline company compute at NOW
       const refCompute = usBaselineRefCompute;
 
-      // Sample company compute timelines for the backend (0.25yr grid, 2024-2040)
-      const _sampleTimeline = (fn) => {
+      // Sample company compute timelines for the backend (0.25yr grid, 2024-2040).
+      // For attack/scOnly timelines, inject refinement samples right at and just before
+      // effStrikeDate so the post-strike discontinuity isn't smeared across a full
+      // 0.25yr grid cell when the backend np.interp's between samples. Without this,
+      // strike dates that land exactly on a quarterly boundary (Jan/Apr/Jul/Oct of any
+      // year) cause the post-strike drop to leak backward into the prior quarter.
+      const _sampleTimeline = (fn, refineAt) => {
         const out = [];
         for (let y = 2024; y <= 2040.001; y += 0.25) out.push([y, Math.max(fn(y), 1)]);
+        if (refineAt && refineAt > 2024 && refineAt < 2040) {
+          const eps = 1e-3;
+          out.push([refineAt - eps, Math.max(fn(refineAt - eps), 1)]);
+          out.push([refineAt,       Math.max(fn(refineAt),       1)]);
+        }
+        out.sort((a, b) => a[0] - b[0]);
         return out;
       };
-      const _baselineTL = _sampleTimeline(baselineCompanyFn);
-      const _attackTL = _sampleTimeline(attackCompanyFn);
-      const _scOnlyTL = _sampleTimeline(scOnlyCompanyFn);
+      const _baselineTL = _sampleTimeline(baselineCompanyFn, null);
+      const _attackTL   = _sampleTimeline(attackCompanyFn,   effStrikeDate);
+      const _scOnlyTL   = _sampleTimeline(scOnlyCompanyFn,   effStrikeDate);
 
       // Prefer AIFP backend-derived algo curve when available; fall back to local port.
       let _remoteBaseline = useAifpBackend ? remoteAlgoFns[`${country}-baseline`] : null;
