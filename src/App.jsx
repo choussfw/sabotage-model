@@ -155,7 +155,7 @@ const RAW = [
 ["US",24576,1,"Meta GenAI 2024b",2024.2,"E",-1],
 ["US",24576,1,"Meta GenAI 2024a",2024.2,"E",-1],
 ["US",23699,-1,"Google New Albany Phase 1",2024.3,"E",19],
-["US",22000,-1,"Inflection AI Cluster",2027.0,"P",-1],
+["US",22000,-1,"Inflection AI Cluster",2025.4372,"E",-1],
 ["US",21649,1,"Oracle OCI MI300x",2024.87,"E",-1],
 ["US",20000,-1,"Andreessen Horowitz Oxygen",2024.81,"E",-1],
 ["US",20000,-1,"AWS EC2 P5 UltraClusters",2023.57,"E",-1],
@@ -173,7 +173,7 @@ const RAW = [
 ["US",10332,1,"Oracle OCI Supercluster A100s",2023.87,"E",-1],
 ["US",10117,-1,"Google TPUv5e",2023.85,"E",-1],
 ["US",10000,1,"Imbue 10k Cluster",2023.68,"E",-1],
-["US",10000,1,"Poolside 10k Cluster",2027.0,"P",-1],
+["US",10000,1,"Poolside 10k Cluster",2025.4103,"E",-1],
 ["US",10000,1,"Tesla 10k H100 Cluster",2023.66,"E",-1],
 ["US",8000,1,"Magic G4 Google Cloud Rental",2024.5,"E",-1],
 ["US",5045,1,"Meta Research SuperCluster (RSC-1) Phase 2",2023.42,"E",-1],
@@ -182,7 +182,7 @@ const RAW = [
 ["US",1917,1,"Meta Research SuperCluster (RSC-1) Phase 1",2022.1,"E",-1],
 ["US",908,1,"IBM Vela",2022.45,"E",-1],
 ["US",828,1,"Microsoft Ares/Maia",2023.91,"E",-1],
-["US",8000,1,"Tesla Dojo 1 Planned Phase 2",2027.0,"P",-1],
+["US",8000,1,"Tesla Dojo 1 Planned Phase 2",2025.2869,"E",-1],
 ["US",7883,1,"Microsoft GPT-4 cluster",2022.33,"E",-1],
 ["US",7283,1,"Oak Ridge NL Frontier",2022.41,"E",-1],
 ["US",6367,-1,"AWS EC2 Trn1",2022.78,"E",-1],
@@ -195,12 +195,12 @@ const RAW = [
 ["US",4424,1,"Together AI H100 Cluster",2023.79,"E",-1],
 ["US",4339,1,"Amazon Titan training cluster",2023.04,"E",-1],
 ["US",4156,1,"Google Hypercomputer TPU v5p pod",2023.93,"E",-1],
-["US",4088,1,"Voltage Park Virginia",2027.0,"P",-1],
-["US",4088,1,"Voltage Park Location 6",2027.0,"P",-1],
-["US",4088,1,"Voltage Park Texas Phase 2",2027.0,"P",45],
-["US",4088,1,"Voltage Park Location 5",2027.0,"P",-1],
-["US",4088,1,"Voltage Park Utah",2027.0,"P",-1],
-["US",4088,1,"Voltage Park Washington",2027.0,"P",-1],
+["US",4088,1,"Voltage Park Virginia",2025.692,"E",-1],
+["US",4088,1,"Voltage Park Location 6",2025.9506,"E",-1],
+["US",4088,1,"Voltage Park Texas Phase 2",2025.557,"E",45],
+["US",4088,1,"Voltage Park Location 5",2025.0525,"E",-1],
+["US",4088,1,"Voltage Park Utah",2025.1498,"E",-1],
+["US",4088,1,"Voltage Park Washington",2025.3445,"E",-1],
 ["US",4032,1,"ExxonMobil Discovery 6",2025.46,"E",-1],
 ["US",4000,1,"CoreWeave LiquidLab",2024.5,"E",-1],
 ["US",4000,1,"Microsoft Azure ND H100 v5 VM",2023.2,"E",-1],
@@ -250,31 +250,31 @@ const RAW = [
 ["China",24500,0,"DeepSeek Full Training Fleet [EST]",2025.0,"E",-1],
 ["China",20000,0,"Anon CN B",2024.21,"E",-1],
 ["China",20000,0,"Anon CN C",2024.54,"E",-1],
-["China",20000,1,"Anon CN D",2025.08,"E",-1],
+["China",20000,1,"Anon CN D",2025.7545,"E",-1],
 ["China",20000,-1,"Anon CN E",2024.87,"E",-1],
-["China",20000,1,"Anon CN F",2025.16,"E",-1],
+["China",20000,1,"Anon CN F",2025.2357,"E",-1],
 ["China",10500,1,"Baidu Kunlun P800 Training Cluster",2025.25,"E",-1],
 ["China",10000,1,"Anon CN G",2024.79,"E",-1],
 ["China",10000,1,"Anon CN H",2025.12,"E",-1],
 ["China",10000,0,"Anon CN I",2024.46,"E",-1],
 ["China",8000,1,"Anon CN J",2024.21,"E",-1],
-["China",8000,1,"Anon CN K",2025.25,"E",-1],
+["China",8000,1,"Anon CN K",2025.4941,"E",-1],
 ["China",8000,1,"Anon CN L",2024.62,"E",-1],
 ["China",8000,0,"Anon CN M",2023.29,"E",-1],
 ["China",6000,1,"Anon CN N",2022.62,"E",-1],
-["China",6000,1,"Anon CN O",2025.33,"E",-1],
+["China",6000,1,"Anon CN O",2025.2139,"E",-1],
 ["China",5000,1,"Anon CN P",2024.46,"E",-1],
 ["China",5000,1,"Anon CN Q",2025.12,"E",-1],
 ["China",4000,1,"Anon CN R",2023.71,"E",-1],
 ["China",4000,1,"Anon CN S",2024.62,"E",-1],
 ["China",4000,1,"Anon CN T",2024.37,"E",-1],
 ["China",4000,-1,"Anon CN U",2024.87,"E",-1],
-["China",4000,1,"Anon CN V",2025.41,"E",-1],
+["China",4000,1,"Anon CN V",2025.1915,"E",-1],
 ["China",3000,1,"Anon CN W",2024.5,"E",-1],
 ["China",3000,1,"Anon CN X",2021.21,"E",-1],
 ["China",3000,1,"Anon CN Y",2024.04,"E",-1],
 ["China",3000,1,"Anon CN Z",2021.54,"E",-1],
-["China",3000,1,"Anon CN AA",2025.5,"E",-1],
+["China",3000,1,"Anon CN AA",2025.4968,"E",-1],
 ["China",3000,1,"Anon CN AB",2025.04,"E",-1],
 ["China",3000,0,"Anon CN AC",2024.46,"E",-1],
 ["China",2048,1,"DeepSeek V3 Training Cluster",2024.42,"E",-1],
@@ -284,21 +284,21 @@ const RAW = [
 ["China",2000,1,"Anon CN AG",2024.79,"E",-1],
 ["China",2000,1,"Anon CN AH",2021.29,"E",-1],
 ["China",2000,0,"Anon CN AI",2022.62,"E",-1],
-["China",2000,1,"Anon CN AJ",2025.58,"E",-1],
+["China",2000,1,"Anon CN AJ",2025.1486,"E",-1],
 ["China",2000,1,"Anon CN AK",2024.46,"E",-1],
 ["China",1140,1,"Huawei Pangu Ultra MoE 910Bs",2024.5,"E",-1],
 ["China",1000,1,"Anon CN AL",2024.04,"E",-1],
-["China",1000,-1,"Anon CN AM",2025.66,"E",-1],
-["China",1000,1,"Anon CN AN",2025.75,"E",-1],
-["China",1000,1,"Anon CN AO",2025.83,"E",-1],
+["China",1000,-1,"Anon CN AM",2025.933,"E",-1],
+["China",1000,1,"Anon CN AN",2025.455,"E",-1],
+["China",1000,1,"Anon CN AO",2025.6487,"E",-1],
 ["China",1000,1,"Anon CN AP",2024.87,"E",-1],
 ["China",1000,1,"Anon CN AQ",2022.54,"E",-1],
 ["China",1000,1,"Anon CN AR",2020.71,"E",-1],
 ["China",1000,0,"Anon CN AS",2022.87,"E",-1],
 ["China",1000,1,"Anon CN AT",2024.96,"E",-1],
-["China",1000,1,"Anon CN AU",2025.91,"E",-1],
+["China",1000,1,"Anon CN AU",2025.1832,"E",-1],
 ["China",1000,1,"Anon CN AV",2024.71,"E",-1],
-["China",1000,-1,"Anon CN AW",2025.99,"E",-1],
+["China",1000,-1,"Anon CN AW",2025.914,"E",-1],
 // === Ally (69 entries) ===
 ["Ally",20262759,-1,"Abu Dhabi UAE/USA 5GW Campus Phase 2",2030.5,"P",0],
 ["Ally",5103588,-1,"South Korea Planned 3GW Cluster",2028.5,"P",-1],
@@ -317,8 +317,8 @@ const RAW = [
 ["Ally",101061,1,"EU AI Gigafactory #2",2026.75,"P",-1],
 ["Ally",101061,1,"EU AI Gigafactory #5",2026.75,"P",-1],
 ["Ally",60000,1,"Nebius Finland Phase 2",2025.75,"P",29],
-["Ally",26518,1,"Sesterce Pegasus",2027.0,"P",-1],
-["Ally",25265,1,"ParTec ELBJUWEL",2027.0,"P",-1],
+["Ally",26518,1,"Sesterce Pegasus",2025.5341,"E",-1],
+["Ally",25265,1,"ParTec ELBJUWEL",2025.7599,"E",-1],
 ["Ally",23536,1,"\"Jupiter, Jülich\"",2025.44,"E",-1],
 ["Ally",16384,1,"NexGen Cloud Hyperstack AQ Compute Su...",2024.3,"E",-1],
 ["Ally",15096,1,"Sakura's B200s Phase 2",2028.12,"P",34],
@@ -326,7 +326,7 @@ const RAW = [
 ["Ally",13050,1,"Foxconn Big Innovation Cloud AI factory",2026.5,"P",-1],
 ["Ally",11642,1,"Foxconn Hon Hai Kaohsiung Supercomputer",2026.5,"P",-1],
 ["Ally",10752,1,"Alps Supercomputer Phase 2",2024.71,"E",36],
-["Ally",9096,1,"SoftBank Planned B200 Superpod",2027.0,"P",-1],
+["Ally",9096,1,"SoftBank Planned B200 Superpod",2025.6754,"E",-1],
 ["Ally",8800,1,"S. Korea 6th national supercomputer",2026.5,"P",-1],
 ["Ally",8192,1,"Sesterce Nordics",2024.49,"E",-1],
 ["Ally",8000,1,"Nebius 8k Finland Phase 1",2024.36,"E",29],
@@ -386,15 +386,15 @@ const RAW = [
 ["Other",38979,1,"YTL AI Johor",2025.62,"P",-1],
 ["Other",16384,1,"Yotta Shakti Cloud D1",2025.5,"P",-1],
 ["Other",16384,1,"Yotta Shakti Cloud NM1 Phase 2",2025.5,"P",33],
-["US",15000,1,"G42 Microsoft 30Mw UAE Cluster A",2027.0,"P",-1],
-["US",15000,1,"G42 Microsoft 30Mw UAE Cluster B",2027.0,"P",-1],
-["Other",12633,1,"Saudi Data & AI Authority Sovereign A...",2027.0,"P",-1],
+["US",15000,1,"G42 Microsoft 30Mw UAE Cluster A",2025.5387,"E",-1],
+["US",15000,1,"G42 Microsoft 30Mw UAE Cluster B",2025.0134,"E",-1],
+["Other",12633,1,"Saudi Data & AI Authority Sovereign A...",2025.4046,"E",-1],
 ["Other",7475,1,"Aramco Groq Inference Cluster",2025.04,"E",-1],
 ["Other",4096,1,"Yotta Shakti Cloud NM1 Phase 1",2024.37,"E",33],
 ["Other",4000,1,"Telangana Yotta H1 Hyderbad AI City C...",2026.5,"P",-1],
-["Other",4000,1,"OneAsia OBON Clusters",2027.0,"P",-1],
+["Other",4000,1,"OneAsia OBON Clusters",2025.9445,"E",-1],
 ["Other",3000,1,"FPT AI Factory Vietnam",2025.12,"P",-1],
-["Other",2816,1,"KAUST Shaheen-III",2027.0,"P",-1],
+["Other",2816,1,"KAUST Shaheen-III",2025.4369,"E",-1],
 ["Other",1501,1,"HUMAIN Saudi Arabia/NVIDIA Phase 1",2026.5,"P",6],
 ["US",1292,1,"Paper on Falcon 180B",2023.91,"E",-1],
 ["Other",1272,1,"Core42 SuperPOD",2024.83,"E",-1],
@@ -600,29 +600,29 @@ function getMaxCluster(year) {
 // iterative cap-and-redistribute at AIFP_MAX_CLUSTER. Replaces the prior cumul-share-diff
 // derivation, which clipped negative diffs and incorrectly produced zero new builds in
 // some buckets when their cumul share dropped (e.g., 2030 1M-10M).
-//   sigma(t) = 1.640 + 0.713 * ln(t - 2021)
-//   N_new(t) = N(t) - N(t-1) where N(t) = 226 * exp(0.281 * (t-2025))
+//   sigma(t) = 1.639 + 0.688 * ln(t - 2021)
+//   N_new(t) = N(t) - N(t-1) where N(t) = 246 * exp(0.296 * (t-2025))
 //   T_new(t) = (AIFP[t] - AIFP[t-1]) * us_share(t)
 //   mu_new(t) = ln(T_new / N_new) - sigma^2 / 2
 const NEW_BUILD_ANCHORS = {
   2023: [1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-  2024: [0.001266, 0.998734, 0.000000, 0.000000, 0.000000, 0.000000],
-  2025: [0.007950, 0.161009, 0.831042, 0.000000, 0.000000, 0.000000],
-  2026: [0.006794, 0.091646, 0.901560, 0.000000, 0.000000, 0.000000],
-  2027: [0.004552, 0.052675, 0.335303, 0.607470, 0.000000, 0.000000],
-  2028: [0.002740, 0.031255, 0.204324, 0.761681, 0.000000, 0.000000],
-  2029: [0.001650, 0.018856, 0.127542, 0.851952, 0.000000, 0.000000],
-  2030: [0.001398, 0.014904, 0.096517, 0.380413, 0.506768, 0.000000],
-  2031: [0.001175, 0.011953, 0.075531, 0.296863, 0.614479, 0.000000],
-  2032: [0.000968, 0.009626, 0.060590, 0.241606, 0.687211, 0.000000],
-  2033: [0.000891, 0.008479, 0.051867, 0.204229, 0.734533, 0.000000],
-  2034: [0.000744, 0.006986, 0.042767, 0.170893, 0.446098, 0.332512],
-  2035: [0.000632, 0.005854, 0.035795, 0.144625, 0.386423, 0.426672],
-  2036: [0.000568, 0.005147, 0.031123, 0.125746, 0.339667, 0.497749],
-  2037: [0.000506, 0.004517, 0.027165, 0.110228, 0.301992, 0.555590],
-  2038: [0.000449, 0.003966, 0.023819, 0.097384, 0.271234, 0.603147],
-  2039: [0.000401, 0.003514, 0.021096, 0.086944, 0.246102, 0.641944],
-  2040: [0.000361, 0.003139, 0.018863, 0.078398, 0.225463, 0.673776],
+  2024: [0.016746, 0.983254, 0.000000, 0.000000, 0.000000, 0.000000],
+  2025: [0.011630, 0.197665, 0.790705, 0.000000, 0.000000, 0.000000],
+  2026: [0.008652, 0.106117, 0.885231, 0.000000, 0.000000, 0.000000],
+  2027: [0.005682, 0.061209, 0.356242, 0.576867, 0.000000, 0.000000],
+  2028: [0.003454, 0.036976, 0.222846, 0.736723, 0.000000, 0.000000],
+  2029: [0.002107, 0.022728, 0.142606, 0.832558, 0.000000, 0.000000],
+  2030: [0.001796, 0.018145, 0.109512, 0.395538, 0.475009, 0.000000],
+  2031: [0.001523, 0.014727, 0.086974, 0.314237, 0.582539, 0.000000],
+  2032: [0.001270, 0.012021, 0.070802, 0.259916, 0.655990, 0.000000],
+  2033: [0.001182, 0.010707, 0.061348, 0.222682, 0.704080, 0.000000],
+  2034: [0.001000, 0.008944, 0.051318, 0.189186, 0.448508, 0.301043],
+  2035: [0.000861, 0.007598, 0.043561, 0.162476, 0.394596, 0.390906],
+  2036: [0.000784, 0.006764, 0.038361, 0.143132, 0.351643, 0.459315],
+  2037: [0.000708, 0.006014, 0.033914, 0.127096, 0.316782, 0.515485],
+  2038: [0.000637, 0.005351, 0.030119, 0.113705, 0.288107, 0.562080],
+  2039: [0.000577, 0.004802, 0.027009, 0.102740, 0.264489, 0.600382],
+  2040: [0.000526, 0.004346, 0.024445, 0.093705, 0.244955, 0.632021],
 };
 
 function getNewBuildShares(year) {
@@ -3404,10 +3404,9 @@ export default function App() {
             <Btn active={showSim} onClick={()=>setShowSim(!showSim)}>{showSim?"Hide":"Show"} simulated datacenters</Btn>
           </div>
           {(() => {
-            // Cumulative-X% display filter: for each year, sort sim clusters smallest-first
-            // and hide them while their running total stays below SIM_HIDDEN_PCT of that year's
-            // total compute (real + sim). Real clusters are never hidden.
-            const SIM_HIDDEN_PCT = 0.005;
+            // Hide sim clusters whose cumulative bottom-up sum is < 1% of that year's total
+            // compute. Real clusters never hidden.
+            const SIM_HIDDEN_PCT = 0.01;
             const yearTotalGpus = new Map();
             const simByYear = new Map();
             scPoints.forEach(pt => {
@@ -3506,7 +3505,7 @@ export default function App() {
                   onMouseEnter={() => setHiddenTipHover(true)}
                   onMouseLeave={() => setHiddenTipHover(false)}
                 >
-                  (+{hiddenCount} small sim clusters not shown — bottom 0.5% of yearly compute)
+                  (+{hiddenCount} small sim clusters not shown — bottom 1% of yearly compute)
                   {hiddenTipHover && (
                     <div style={{
                       position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
