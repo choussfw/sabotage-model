@@ -176,6 +176,12 @@ const RAW = [
 ["US",10000,1,"Poolside 10k Cluster",2027.0,"P",-1],
 ["US",10000,1,"Tesla 10k H100 Cluster",2023.66,"E",-1],
 ["US",8000,1,"Magic G4 Google Cloud Rental",2024.5,"E",-1],
+["US",5045,1,"Meta Research SuperCluster (RSC-1) Phase 2",2023.42,"E",-1],
+["US",3584,1,"NVIDIA Coreweave MLPerf v3.0 2023",2023.46,"E",-1],
+["US",2522,1,"Meta Research SuperCluster 2 (RSC-2)",2023.87,"E",-1],
+["US",1917,1,"Meta Research SuperCluster (RSC-1) Phase 1",2022.1,"E",-1],
+["US",908,1,"IBM Vela",2022.45,"E",-1],
+["US",828,1,"Microsoft Ares/Maia",2023.91,"E",-1],
 ["US",8000,1,"Tesla Dojo 1 Planned Phase 2",2027.0,"P",-1],
 ["US",7883,1,"Microsoft GPT-4 cluster",2022.33,"E",-1],
 ["US",7283,1,"Oak Ridge NL Frontier",2022.41,"E",-1],
@@ -244,31 +250,31 @@ const RAW = [
 ["China",24500,0,"DeepSeek Full Training Fleet [EST]",2025.0,"E",-1],
 ["China",20000,0,"Anon CN B",2024.21,"E",-1],
 ["China",20000,0,"Anon CN C",2024.54,"E",-1],
-["China",20000,1,"Anon CN D",2027.0,"P",-1],
+["China",20000,1,"Anon CN D",2025.08,"E",-1],
 ["China",20000,-1,"Anon CN E",2024.87,"E",-1],
-["China",20000,1,"Anon CN F",2027.0,"P",-1],
+["China",20000,1,"Anon CN F",2025.16,"E",-1],
 ["China",10500,1,"Baidu Kunlun P800 Training Cluster",2025.25,"E",-1],
 ["China",10000,1,"Anon CN G",2024.79,"E",-1],
 ["China",10000,1,"Anon CN H",2025.12,"E",-1],
 ["China",10000,0,"Anon CN I",2024.46,"E",-1],
 ["China",8000,1,"Anon CN J",2024.21,"E",-1],
-["China",8000,1,"Anon CN K",2027.0,"P",-1],
+["China",8000,1,"Anon CN K",2025.25,"E",-1],
 ["China",8000,1,"Anon CN L",2024.62,"E",-1],
 ["China",8000,0,"Anon CN M",2023.29,"E",-1],
 ["China",6000,1,"Anon CN N",2022.62,"E",-1],
-["China",6000,1,"Anon CN O",2027.0,"P",-1],
+["China",6000,1,"Anon CN O",2025.33,"E",-1],
 ["China",5000,1,"Anon CN P",2024.46,"E",-1],
 ["China",5000,1,"Anon CN Q",2025.12,"E",-1],
 ["China",4000,1,"Anon CN R",2023.71,"E",-1],
 ["China",4000,1,"Anon CN S",2024.62,"E",-1],
 ["China",4000,1,"Anon CN T",2024.37,"E",-1],
 ["China",4000,-1,"Anon CN U",2024.87,"E",-1],
-["China",4000,1,"Anon CN V",2027.0,"P",-1],
+["China",4000,1,"Anon CN V",2025.41,"E",-1],
 ["China",3000,1,"Anon CN W",2024.5,"E",-1],
 ["China",3000,1,"Anon CN X",2021.21,"E",-1],
 ["China",3000,1,"Anon CN Y",2024.04,"E",-1],
 ["China",3000,1,"Anon CN Z",2021.54,"E",-1],
-["China",3000,1,"Anon CN AA",2027.0,"P",-1],
+["China",3000,1,"Anon CN AA",2025.5,"E",-1],
 ["China",3000,1,"Anon CN AB",2025.04,"E",-1],
 ["China",3000,0,"Anon CN AC",2024.46,"E",-1],
 ["China",2048,1,"DeepSeek V3 Training Cluster",2024.42,"E",-1],
@@ -278,21 +284,21 @@ const RAW = [
 ["China",2000,1,"Anon CN AG",2024.79,"E",-1],
 ["China",2000,1,"Anon CN AH",2021.29,"E",-1],
 ["China",2000,0,"Anon CN AI",2022.62,"E",-1],
-["China",2000,1,"Anon CN AJ",2027.0,"P",-1],
+["China",2000,1,"Anon CN AJ",2025.58,"E",-1],
 ["China",2000,1,"Anon CN AK",2024.46,"E",-1],
 ["China",1140,1,"Huawei Pangu Ultra MoE 910Bs",2024.5,"E",-1],
 ["China",1000,1,"Anon CN AL",2024.04,"E",-1],
-["China",1000,-1,"Anon CN AM",2027.0,"P",-1],
-["China",1000,1,"Anon CN AN",2027.0,"P",-1],
-["China",1000,1,"Anon CN AO",2027.0,"P",-1],
+["China",1000,-1,"Anon CN AM",2025.66,"E",-1],
+["China",1000,1,"Anon CN AN",2025.75,"E",-1],
+["China",1000,1,"Anon CN AO",2025.83,"E",-1],
 ["China",1000,1,"Anon CN AP",2024.87,"E",-1],
 ["China",1000,1,"Anon CN AQ",2022.54,"E",-1],
 ["China",1000,1,"Anon CN AR",2020.71,"E",-1],
 ["China",1000,0,"Anon CN AS",2022.87,"E",-1],
 ["China",1000,1,"Anon CN AT",2024.96,"E",-1],
-["China",1000,1,"Anon CN AU",2027.0,"P",-1],
+["China",1000,1,"Anon CN AU",2025.91,"E",-1],
 ["China",1000,1,"Anon CN AV",2024.71,"E",-1],
-["China",1000,-1,"Anon CN AW",2027.0,"P",-1],
+["China",1000,-1,"Anon CN AW",2025.99,"E",-1],
 // === Ally (69 entries) ===
 ["Ally",20262759,-1,"Abu Dhabi UAE/USA 5GW Campus Phase 2",2030.5,"P",0],
 ["Ally",5103588,-1,"South Korea Planned 3GW Cluster",2028.5,"P",-1],
@@ -524,24 +530,42 @@ function mulberry32(seed) {
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0; return h; }
 
 const SIM_BUCKETS = [
-  [1000, 10000], [10000, 100000], [100000, 1000000], [1000000, 10000000], [10000000, 100000000],
+  [1000, 10000], [10000, 100000], [100000, 1000000], [1000000, 10000000],
+  [10000000, 100000000], [100000000, 1000000000],
 ];
-const SIM_BUCKET_LABELS = ['1K-10K', '10K-100K', '100K-1M', '1M-10M', '10M-100M'];
+const SIM_BUCKET_LABELS = ['1K-10K', '10K-100K', '100K-1M', '1M-10M', '10M-100M', '100M-1B'];
 
-// Clymer/RD factor 1.2 cumulative distribution (% of TOTAL compute in each bucket)
-// Order: [1K-10K, 10K-100K, 100K-1M, 1M-10M, 10M+]
-// Pre-2025 estimated from Epoch dataset observations; 2025-2031 from Clymer/RD output.
+// Lognormal-derived cumulative distribution (% of TOTAL US compute in each bucket).
+// Order: [1K-10K, 10K-100K, 100K-1M, 1M-10M, 10M-100M, 100M-1B]
+// Method: US-anchored truncated lognormal with PROPER iterative cap-and-redistribute.
+//   sigma(t) = 1.640 + 0.713 * ln(t - 2021)   (logarithmic fit to Epoch 2022-2025 US data)
+//   N(t)     = 226 * exp(0.281 * (t - 2025))  (log-linear fit to N_US in [99,138,192,226])
+//   mu(t)    = ln(US_total / N) - sigma^2 / 2
+//   Iterative cap-redistribute: clamp values > cap to cap, scale sub-cap by
+//   (1 + excess/below_sum), repeat until all values <= cap. Converges in 2-3 iterations.
+//   Result: a fraction of clusters end up exactly at the AIFP_MAX_CLUSTER value
+//   (24-73% of US compute depending on year).
+// US_total uses interpolated share (80% -> 84.3% by Jan 2031 strike).
 const CUMUL_ANCHORS = [
-  { year: 2022, shares: [0.55, 0.40, 0.05, 0.00, 0.00] },
-  { year: 2023, shares: [0.45, 0.42, 0.13, 0.00, 0.00] },
-  { year: 2024, shares: [0.38, 0.37, 0.25, 0.00, 0.00] },
-  { year: 2025, shares: [0.341, 0.268, 0.392, 0.00, 0.00] },
-  { year: 2026, shares: [0.176, 0.316, 0.508, 0.00, 0.00] },
-  { year: 2027, shares: [0.078, 0.253, 0.335, 0.334, 0.00] },
-  { year: 2028, shares: [0.035, 0.122, 0.304, 0.206, 0.334] },
-  { year: 2029, shares: [0.015, 0.054, 0.212, 0.237, 0.482] },
-  { year: 2030, shares: [0.007, 0.024, 0.099, 0.265, 0.606] },
-  { year: 2031, shares: [0.003, 0.011, 0.044, 0.143, 0.800] },
+  { year: 2022, shares: [0.988730, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000] },
+  { year: 2023, shares: [0.998001, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000] },
+  { year: 2024, shares: [0.107246, 0.886877, 0.000000, 0.000000, 0.000000, 0.000000] },
+  { year: 2025, shares: [0.046207, 0.352591, 0.598198, 0.000000, 0.000000, 0.000000] },
+  { year: 2026, shares: [0.022733, 0.172724, 0.802929, 0.000000, 0.000000, 0.000000] },
+  { year: 2027, shares: [0.012451, 0.095543, 0.404079, 0.487000, 0.000000, 0.000000] },
+  { year: 2028, shares: [0.007134, 0.057550, 0.266421, 0.668367, 0.000000, 0.000000] },
+  { year: 2029, shares: [0.004194, 0.035366, 0.176693, 0.783440, 0.000000, 0.000000] },
+  { year: 2030, shares: [0.002899, 0.024760, 0.128580, 0.406630, 0.436915, 0.000000] },
+  { year: 2031, shares: [0.002165, 0.018489, 0.098128, 0.324074, 0.556981, 0.000000] },
+  { year: 2032, shares: [0.001676, 0.014354, 0.077814, 0.267336, 0.638689, 0.000000] },
+  { year: 2033, shares: [0.001381, 0.011712, 0.063909, 0.224535, 0.698353, 0.000000] },
+  { year: 2034, shares: [0.001141, 0.009622, 0.052912, 0.189968, 0.445625, 0.300640] },
+  { year: 2035, shares: [0.000952, 0.007982, 0.044208, 0.161833, 0.391831, 0.393116] },
+  { year: 2036, shares: [0.000813, 0.006774, 0.037663, 0.139930, 0.347622, 0.467128] },
+  { year: 2037, shares: [0.000705, 0.005830, 0.032523, 0.122436, 0.311249, 0.527197] },
+  { year: 2038, shares: [0.000615, 0.005064, 0.028369, 0.108210, 0.281210, 0.576478] },
+  { year: 2039, shares: [0.000541, 0.004438, 0.024983, 0.096544, 0.256257, 0.617188] },
+  { year: 2040, shares: [0.000479, 0.003923, 0.022203, 0.086919, 0.235462, 0.650971] },
 ];
 function getCumulShares(year) {
   const a = CUMUL_ANCHORS;
@@ -571,36 +595,39 @@ function getMaxCluster(year) {
   return AIFP_MAX_CLUSTER[0][1];
 }
 
-// Derive new-build shares from cumulative evolution + AIFP totals,
-// then redistribute any budget above the AIFP max cluster cap downward.
+// Per-year NEW BUILD bucket shares — fraction of each year's NEW US compute in each tier.
+// Computed from a per-year lognormal Lognormal(mu_new(t), sigma(t)) of new builds, with
+// iterative cap-and-redistribute at AIFP_MAX_CLUSTER. Replaces the prior cumul-share-diff
+// derivation, which clipped negative diffs and incorrectly produced zero new builds in
+// some buckets when their cumul share dropped (e.g., 2030 1M-10M).
+//   sigma(t) = 1.640 + 0.713 * ln(t - 2021)
+//   N_new(t) = N(t) - N(t-1) where N(t) = 226 * exp(0.281 * (t-2025))
+//   T_new(t) = (AIFP[t] - AIFP[t-1]) * us_share(t)
+//   mu_new(t) = ln(T_new / N_new) - sigma^2 / 2
+const NEW_BUILD_ANCHORS = {
+  2023: [1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
+  2024: [0.001266, 0.998734, 0.000000, 0.000000, 0.000000, 0.000000],
+  2025: [0.007950, 0.161009, 0.831042, 0.000000, 0.000000, 0.000000],
+  2026: [0.006794, 0.091646, 0.901560, 0.000000, 0.000000, 0.000000],
+  2027: [0.004552, 0.052675, 0.335303, 0.607470, 0.000000, 0.000000],
+  2028: [0.002740, 0.031255, 0.204324, 0.761681, 0.000000, 0.000000],
+  2029: [0.001650, 0.018856, 0.127542, 0.851952, 0.000000, 0.000000],
+  2030: [0.001398, 0.014904, 0.096517, 0.380413, 0.506768, 0.000000],
+  2031: [0.001175, 0.011953, 0.075531, 0.296863, 0.614479, 0.000000],
+  2032: [0.000968, 0.009626, 0.060590, 0.241606, 0.687211, 0.000000],
+  2033: [0.000891, 0.008479, 0.051867, 0.204229, 0.734533, 0.000000],
+  2034: [0.000744, 0.006986, 0.042767, 0.170893, 0.446098, 0.332512],
+  2035: [0.000632, 0.005854, 0.035795, 0.144625, 0.386423, 0.426672],
+  2036: [0.000568, 0.005147, 0.031123, 0.125746, 0.339667, 0.497749],
+  2037: [0.000506, 0.004517, 0.027165, 0.110228, 0.301992, 0.555590],
+  2038: [0.000449, 0.003966, 0.023819, 0.097384, 0.271234, 0.603147],
+  2039: [0.000401, 0.003514, 0.021096, 0.086944, 0.246102, 0.641944],
+  2040: [0.000361, 0.003139, 0.018863, 0.078398, 0.225463, 0.673776],
+};
+
 function getNewBuildShares(year) {
-  const curRow = AIFP_DATA.find(([y]) => y === year);
-  const prevRow = AIFP_DATA.find(([y]) => y === year - 1);
-  if (!curRow || !prevRow) return [0.05, 0.15, 0.30, 0.30, 0.20];
-  const [, totalY] = curRow, [, totalP] = prevRow;
-  const newTotal = totalY - totalP;
-  if (newTotal <= 0) return [0.05, 0.15, 0.30, 0.30, 0.20];
-  const cY = getCumulShares(year), cP = getCumulShares(year - 1);
-  const raw = cY.map((s, i) => Math.max(0, totalY * s - totalP * cP[i]));
-  const sum = raw.reduce((a, b) => a + b, 0);
-  const shares = sum > 0 ? raw.map(v => v / sum) : [0.05, 0.15, 0.30, 0.30, 0.20];
-  // Floor: each bucket that has appeared (cumul share > 0) gets at least 2% of new builds.
-  // People still build small clusters even when most new compute goes to big ones.
-  const MIN_NEW_SHARE = 0.02;
-  let deficit = 0;
-  for (let i = 0; i < shares.length; i++) {
-    if (cY[i] > 0 && shares[i] < MIN_NEW_SHARE) {
-      deficit += MIN_NEW_SHARE - shares[i];
-      shares[i] = MIN_NEW_SHARE;
-    }
-  }
-  if (deficit > 0) {
-    let maxI = 0;
-    for (let i = 1; i < shares.length; i++) { if (shares[i] > shares[maxI]) maxI = i; }
-    shares[maxI] = Math.max(MIN_NEW_SHARE, shares[maxI] - deficit);
-  }
-  const s2 = shares.reduce((a, b) => a + b, 0);
-  return s2 > 0 ? shares.map(v => v / s2) : [0.05, 0.15, 0.30, 0.30, 0.20];
+  const yr = Math.floor(year);
+  return NEW_BUILD_ANCHORS[yr] || [0.05, 0.15, 0.25, 0.30, 0.20, 0.05];
 }
 
 // Apply AIFP max cluster cap: redistribute budget from invalid buckets downward
@@ -1151,7 +1178,14 @@ function Slider({ label, hint, value, onChange, min, max, step, format, logScale
   const disp = format ? format(value) : value;
   const handle = e => {
     const raw = parseFloat(e.target.value);
-    onChange(logScale ? Math.round(Math.pow(10, raw)) : raw);
+    let val = logScale ? Math.pow(10, raw) : raw;
+    if (logScale && step && step > 0) {
+      val = Math.round(val / step) * step;
+      val = Math.max(min, Math.min(max, val));
+    } else if (logScale) {
+      val = Math.round(val);
+    }
+    onChange(val);
   };
   const sv = logScale ? Math.log10(Math.max(value,1)) : value;
   const smin = logScale ? Math.log10(Math.max(min,1)) : min;
@@ -1503,8 +1537,32 @@ function ProjectionChart({ title, subtitle, series, xMin, xMax, yMin, yMax, logY
             </g>
           ))}
 
-          {/* Series paths and dots */}
+          {/* Zero baseline (only when y range crosses zero) */}
+          {!logY && yMin < 0 && yMax > 0 && (
+            <line x1={0} y1={yS(0)} x2={w} y2={yS(0)} stroke="#64748b" strokeWidth={1} opacity={0.5} />
+          )}
+
+          {/* Series paths/bars */}
           {series.map((s, si) => {
+            if (s.bars) {
+              const pts = s.data.filter(([x, y]) => x >= xMin && x <= xMax && isFinite(y));
+              if (!pts.length) return null;
+              const zeroY = yS(0);
+              const barW = s.barWidth || 6;
+              return (
+                <g key={si}>
+                  {pts.map(([x, y], i) => {
+                    const cx = xS(x);
+                    const ty = y >= 0 ? yS(y) : zeroY;
+                    const bh = Math.max(1, Math.abs(yS(y) - zeroY));
+                    return (
+                      <rect key={i} x={cx - barW / 2} y={ty} width={barW} height={bh}
+                        fill={s.color} opacity={s.dashed ? 0.45 : 0.85} />
+                    );
+                  })}
+                </g>
+              );
+            }
             const pts = s.data.filter(([x, y]) => x >= xMin && x <= xMax && (!logY || y > 0));
             if (pts.length < 2) return null;
             const pathD = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${xS(x).toFixed(1)},${yS(y).toFixed(1)}`).join(" ");
@@ -1868,9 +1926,9 @@ export default function App() {
   const [showAllGroups, setShowAllGroups] = useState(false);
   const [hiddenTipHover, setHiddenTipHover] = useState(false);
   const [usNatEnabled, setUsNatEnabled] = useState(false); // US nationalization OFF by default
-  const [usNatDate, setUsNatDate] = useState(2029.0 + 1/12);
+  const [usNatDate, setUsNatDate] = useState(2031.0);
   const [cnNatEnabled, setCnNatEnabled] = useState(false);
-  const [cnNatDate, setCnNatDate] = useState(2028.0);
+  const [cnNatDate, setCnNatDate] = useState(2031.0);
   const [wartime, setWartime] = useState(false); // US wartime allocation OFF by default
   const [cnWartime, setCnWartime] = useState(false); // CN wartime allocation
   const [diffusion, setDiffusion] = useState(0.3); // reduced: wartime security, but espionage continues
@@ -1973,7 +2031,7 @@ export default function App() {
   const points = useMemo(() => {
     const src = showSim ? ALL_CLUSTERS : CLUSTERS;
     return src.filter(c => {
-      if (c.gpus < 1000 || c.year < 2021 || c.year >= 2041) return false;
+      if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) return false;
       if (!showAllGroups && (c.country === "Ally" || c.country === "Other")) return false;
       return true;
     });
@@ -2008,7 +2066,7 @@ export default function App() {
     const scSimsPostStrike = showSim ? (() => {
       const scSims = generateSimulatedClusters(countryStrikes, txEnd);
       const scSimsFiltered = scSims.filter(c => {
-        if (c.gpus < 1000 || c.year < 2021 || c.year >= 2041) return false;
+        if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) return false;
         if (!showAllGroups && (c.country === "Ally" || c.country === "Other")) return false;
         return true;
       });
@@ -3232,7 +3290,7 @@ export default function App() {
                   <Slider label="Sabotage threshold (H100-equivalents)"
                     hint="Clusters at or above this size (in H100e) are targeted."
                     value={atk.threshold>=1e11?100000000:atk.threshold} onChange={atk.setThreshold}
-                    min={1000} max={100000000} step={1000} logScale format={v=>atk.threshold>=1e11?"OFF":F(v)} />
+                    min={10000} max={100000000} step={10000} logScale format={v=>atk.threshold>=1e11?"OFF":F(v)} />
                   <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:-4, marginBottom:8 }}>
                     <Btn active={atk.threshold>=1e11} onClick={()=>atk.setThreshold(1e11)}>None</Btn>
                     <Btn active={atk.threshold===10000} onClick={()=>atk.setThreshold(10000)}>10K</Btn>
@@ -3346,20 +3404,30 @@ export default function App() {
             <Btn active={showSim} onClick={()=>setShowSim(!showSim)}>{showSim?"Hide":"Show"} simulated datacenters</Btn>
           </div>
           {(() => {
-            // Compute actual max cluster per year from the data (drops with SC attacks)
-            const actualMaxByYear = {};
+            // Cumulative-X% display filter: for each year, sort sim clusters smallest-first
+            // and hide them while their running total stays below SIM_HIDDEN_PCT of that year's
+            // total compute (real + sim). Real clusters are never hidden.
+            const SIM_HIDDEN_PCT = 0.005;
+            const yearTotalGpus = new Map();
+            const simByYear = new Map();
             scPoints.forEach(pt => {
               const yr = Math.floor(pt.year);
-              if (!actualMaxByYear[yr] || pt.gpus > actualMaxByYear[yr]) actualMaxByYear[yr] = pt.gpus;
+              yearTotalGpus.set(yr, (yearTotalGpus.get(yr) || 0) + pt.gpus);
+              if (!pt.sim) return;
+              if (!simByYear.has(yr)) simByYear.set(yr, []);
+              simByYear.get(yr).push(pt);
             });
-            // Dynamic display threshold: hide sim clusters below 0.5% of that year's actual max cluster,
-            // but never hide anything >= 10K H100-eq
-            const chartPointsRaw = scPoints.filter(pt => {
-              if (!pt.sim) return true;
-              if (pt.gpus >= 10000) return true;
-              const yearMax = actualMaxByYear[Math.floor(pt.year)] || getMaxCluster(Math.floor(pt.year));
-              return pt.gpus >= yearMax * 0.005;
-            });
+            const hiddenSet = new Set();
+            for (const [yr, pts] of simByYear) {
+              pts.sort((a, b) => a.gpus - b.gpus);
+              const threshold = (yearTotalGpus.get(yr) || 0) * SIM_HIDDEN_PCT;
+              let cum = 0;
+              for (const p of pts) {
+                if (cum + p.gpus < threshold) { hiddenSet.add(p); cum += p.gpus; }
+                else break;
+              }
+            }
+            const chartPointsRaw = scPoints.filter(pt => !hiddenSet.has(pt));
             // Per-year top-10% threshold for sim clusters: anything below this skips
             // hover handlers (cuts ~90% of event listener count). Explicit (non-sim)
             // clusters always remain interactive.
@@ -3419,12 +3487,7 @@ export default function App() {
             </div>}
             {hiddenCount > 0 && (() => {
               // Compute breakdown of hidden clusters
-              const hiddenPts = scPoints.filter(pt => {
-                if (!pt.sim) return false;
-                if (pt.gpus >= 10000) return false;
-                const yearMax = actualMaxByYear[Math.floor(pt.year)] || getMaxCluster(Math.floor(pt.year));
-                return pt.gpus < yearMax * 0.005;
-              });
+              const hiddenPts = Array.from(hiddenSet);
               const byCountry = {};
               let totalGpus = 0;
               hiddenPts.forEach(pt => {
@@ -3443,7 +3506,7 @@ export default function App() {
                   onMouseEnter={() => setHiddenTipHover(true)}
                   onMouseLeave={() => setHiddenTipHover(false)}
                 >
-                  (+{hiddenCount} small sim clusters not shown)
+                  (+{hiddenCount} small sim clusters not shown — bottom 0.5% of yearly compute)
                   {hiddenTipHover && (
                     <div style={{
                       position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
