@@ -643,7 +643,13 @@ function capBuildShares(shares, maxSize) {
 }
 
 // Country-specific max cluster cap multipliers (relative to AIFP global max)
-const SIM_MAX_MULTIPLIER = { US: 1.0, China: 0.33, Ally: 0.5, Other: 0.3 };
+// All blocs share the AIFP frontier cap. Per-bloc cluster size constraints emerge
+// naturally from compute share: smaller blocs have smaller new-build budgets, so they
+// sample fewer clusters from the same lognormal and the max-of-N is naturally smaller.
+// Empirically (Epoch end-2025): largest CN cluster / largest US cluster ≈ 0.14, which
+// matches the natural same-distribution prediction (~0.18) better than any explicit
+// per-bloc max multiplier.
+const SIM_MAX_MULTIPLIER = { US: 1.0, China: 1.0, Ally: 1.0, Other: 1.0 };
 
 const SIM_COUNTRY_SHARES = SHARES_NOW;
 
@@ -734,6 +740,220 @@ function getStrikeYearBaseline(strikeYear) {
     }
   }
   return null;
+}
+
+// === Analytical strike-outcome formulas (in-expectation over the bucket model) ===
+// For a log-uniform cluster-size distribution on [a, b]:
+//   PDF f(x) = 1 / (x · ln(b/a))
+//   E[X] = (b - a) / ln(b/a)
+//   compute fraction above T = (b - T) / (b - a)        (linear in T)
+//   count above T per unit compute = ln(b/T) / (b - a)
+// These are the deterministic mean of the random sampling done in
+// generateSimulatedClusters, NOT a single realization.
+
+function _analyticFracAbove(T, a, b) {
+  if (T <= a) return 1;
+  if (T >= b) return 0;
+  return (b - T) / (b - a);
+}
+
+function _analyticCountAbovePerCompute(T, a, b) {
+  if (T <= a) return Math.log(b / a) / (b - a);
+  if (T >= b) return 0;
+  return Math.log(b / T) / (b - a);
+}
+
+function _analyticCountAllPerCompute(a, b) {
+  return Math.log(b / a) / (b - a);
+}
+
+// What fraction of a year's clusters are "existing at strike" by the same
+// criterion computeStats uses (yearFrac <= strikeDate + 0.05). Clusters are
+// uniform in [year, year + 0.99] in the sampler, so this is linear in strikeDate.
+function _analyticExistingFrac(year, strikeDate) {
+  const cut = strikeDate + 0.05;
+  if (year + 0.99 <= cut) return 1;
+  if (year >= cut) return 0;
+  return Math.max(0, Math.min(1, (cut - year) / 0.99));
+}
+
+// Compute strike outcome metrics analytically over the bucket distribution.
+//   country     - "US" | "China" | "Ally" | "Other"
+//   threshold   - strike threshold in H100-eq
+//   strikeDate  - effective hit-detection date (no +0.25 pipeline delay)
+//   continuous  - true if continuous denial is on (preempt post-strike clusters)
+//   cs          - supply-chain config { strikeYear, scFactor, tsmcStrike, smicStrike } or null
+//   txEnd       - shares transition end year (Infinity if disabled)
+//   preemptCutoff - upper-bound year for counting preempted clusters (post-strike
+//                   clusters built after this don't matter — training already done).
+//                   Pass Infinity for the unbounded count.
+// Returns { destroyedCompute, destroyedCount, preemptedCompute, preemptedCount,
+//           totalCompute, totalCount }.
+//
+// Methodology: replicates generateSimulatedClusters' budget construction year-by-year
+// (pre-strike years use original SHARES_NOW + full budget; strike year + later use
+// transitioning shares + SC-blended budget). Real Epoch clusters contribute their
+// deterministic sizes; the bucket-distribution analytical formulas are applied to
+// the REMAINING gap (newCountry - existingNew), exactly matching what the sampler does.
+function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs, txEnd, preemptCutoff = Infinity) {
+  let destroyedCompute = 0, destroyedCount = 0;
+  let preemptedCompute = 0, preemptedCount = 0;
+  let totalCompute = 0, totalCount = 0;
+
+  const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + 0.25 : Infinity;
+  const scFloorYear = Math.floor(scEffStrike);
+  const cutoff = strikeDate + 0.05;
+
+  // Pre-bucket real clusters by floor(year) for fast gap-subtraction lookup.
+  // Use raw cluster sizes here (gap subtraction matches sampler line 928 which
+  // sums raw c.gpus per year).
+  const realByYear = new Map();
+  for (const c of CLUSTERS) {
+    if (c.country !== country) continue;
+    const yr = Math.floor(c.year);
+    if (!realByYear.has(yr)) realByYear.set(yr, []);
+    realByYear.get(yr).push(c);
+  }
+
+  // === Real clusters: deterministic contribution, GROUPED INTO SITES BY CHAIN ===
+  // The sampler groups clusters by chain ID (matching scPoints/computeStats line 2329):
+  // multiple phases of the same physical site collapse into ONE site whose size is
+  // max(phase.gpus) for phases built before strike. Without this grouping, the
+  // analytic over-counts US sites by ~69 (since US has many multi-phase chains).
+  const preemptCutoffPad = preemptCutoff === Infinity ? Infinity : preemptCutoff + 0.05;
+  const siteMap = new Map();
+  let _siteIdx = 0;
+  for (const c of CLUSTERS) {
+    if (c.country !== country) continue;
+    // Mirror points-filter: clusters with gpus < 1000 or year < 2022 or year >= 2041
+    // are filtered out before reaching scPoints/scSites.
+    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+    let gpus = c.gpus;
+    if (cs && cs.strikeYear != null && c.year > cs.strikeYear && c.year > NOW) {
+      const factor = getRecoveredSCFactor(country, c.year, cs);
+      gpus = Math.round(c.gpus * factor);
+      if (gpus < 1000) continue;
+    }
+    const key = c.chain >= 0 ? 'c' + c.chain : 's' + (_siteIdx++);
+    let site = siteMap.get(key);
+    if (!site) {
+      site = { maxGpus: 0, maxExistingGpus: 0, hasExisting: false, hasPostInWindow: false };
+      siteMap.set(key, site);
+    }
+    if (gpus > site.maxGpus) site.maxGpus = gpus;
+    if (c.year <= cutoff) {
+      site.hasExisting = true;
+      if (gpus > site.maxExistingGpus) site.maxExistingGpus = gpus;
+    } else if (continuous && c.year <= preemptCutoffPad) {
+      site.hasPostInWindow = true;
+    }
+  }
+  for (const site of siteMap.values()) {
+    if (site.hasExisting) {
+      totalCompute += site.maxExistingGpus;
+      totalCount += 1;
+      if (site.maxExistingGpus >= threshold) {
+        destroyedCompute += site.maxExistingGpus;
+        destroyedCount += 1;
+      }
+    } else if (site.hasPostInWindow) {
+      // post-strike-only site, in the cutoff window: counts toward preempted
+      // if its peak compute exceeds threshold (matches sampler's
+      // s.maxGpus >= effThreshold && s.maxExistingGpus < effThreshold filter)
+      if (site.maxGpus >= threshold) {
+        preemptedCompute += site.maxGpus;
+        preemptedCount += 1;
+      }
+    }
+  }
+
+  // === Sim-equivalent gap: analytical bucket contribution ===
+  for (let yi = 1; yi < AIFP_DATA.length; yi++) {
+    const [year, globalTotal] = AIFP_DATA[yi];
+    const [, prevTotal] = AIFP_DATA[yi - 1];
+    const baseNewGlobal = globalTotal - prevTotal;
+    if (baseNewGlobal <= 0) continue;
+
+    const baseGlobalMax = getMaxCluster(year);
+
+    // Match scPoints' hybrid: pre-SC-floor years use original generation params,
+    // strike year + later use SC-adjusted generation params.
+    let newCountry, countryMax;
+    if (year < scFloorYear || !cs || cs.strikeYear == null) {
+      const yearShare = SHARES_NOW[country] || 0;
+      newCountry = baseNewGlobal * yearShare;
+      countryMax = Math.round(baseGlobalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+    } else {
+      const preFrac = Math.max(0, Math.min(1, scEffStrike - year));
+      let newGlobal = baseNewGlobal;
+      let isPost = false;
+      if (preFrac < 1) {
+        const evalYear = Math.max(year, scEffStrike);
+        const baselineAtStrike = getStrikeYearBaseline(cs.strikeYear) || baseNewGlobal;
+        const psFactor = getPostStrikeFraction(country, evalYear, cs, baseNewGlobal, baselineAtStrike);
+        newGlobal = preFrac * baseNewGlobal + (1 - preFrac) * psFactor * baseNewGlobal;
+        isPost = true;
+      }
+      const effScF = baseNewGlobal > 0 ? newGlobal / baseNewGlobal : 1.0;
+      const globalMax = isPost
+        ? Math.round(baseGlobalMax * Math.max(effScF, 0.15))
+        : baseGlobalMax;
+      countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+      const yearShares = getCountryShares(year, txEnd);
+      const yearShare = yearShares[country] || 0;
+      newCountry = newGlobal * yearShare;
+    }
+
+    // Subtract existing real clusters from the budget (matching sampler line 928).
+    const realThisYear = realByYear.get(year) || [];
+    const existingNewSum = realThisYear.reduce((s, c) => s + c.gpus, 0);
+    const gap = newCountry - existingNewSum;
+    if (gap < 1000) continue;  // sampler skip threshold
+
+    const rawShares = getNewBuildShares(year);
+    const buildShares = capBuildShares(rawShares, countryMax);
+
+    const existingFrac = _analyticExistingFrac(year, strikeDate);
+    // For preempted compute: cluster must be built AFTER strike but BEFORE preemptCutoff.
+    // cutoffFrac is the fraction of this year built before preemptCutoff (same shape
+    // as existingFrac but using preemptCutoff). The post-strike-but-pre-cutoff window
+    // is (cutoffFrac - existingFrac).
+    const cutoffFrac = preemptCutoff === Infinity
+      ? 1.0
+      : _analyticExistingFrac(year, preemptCutoff);
+    const postEffFrac = Math.max(0, cutoffFrac - existingFrac);
+
+    const preCompute = gap * existingFrac;
+    const postCompute = gap * postEffFrac;
+
+    for (let bi = 0; bi < SIM_BUCKETS.length; bi++) {
+      const [lo, rawHi] = SIM_BUCKETS[bi];
+      const hi = Math.min(rawHi, countryMax);
+      if (hi <= lo || buildShares[bi] <= 0) continue;
+
+      const fracAbove = _analyticFracAbove(threshold, lo, hi);
+      const cntAbovePer = _analyticCountAbovePerCompute(threshold, lo, hi);
+      const cntAllPer = _analyticCountAllPerCompute(lo, hi);
+
+      const preBucket = preCompute * buildShares[bi];
+      destroyedCompute += preBucket * fracAbove;
+      destroyedCount += preBucket * cntAbovePer;
+      totalCompute += preBucket;
+      totalCount += preBucket * cntAllPer;
+
+      if (continuous) {
+        const postBucket = postCompute * buildShares[bi];
+        preemptedCompute += postBucket * fracAbove;
+        preemptedCount += postBucket * cntAbovePer;
+      }
+    }
+  }
+
+  return {
+    destroyedCompute, destroyedCount,
+    preemptedCompute, preemptedCount,
+    totalCompute, totalCount,
+  };
 }
 
 function generateSimulatedClusters(countryStrikes, transitionEndYear) {
@@ -2164,6 +2384,29 @@ export default function App() {
     // US baseline company compute function (no nat, no attack) - used as diffusion reference
     const usBaselineCompanyFn = (t) => usBaselineTimeline(t) * getCompanyShareOfNational(t);
 
+    // Shares-transition end year for analytical bucket calc (matches scPoints memo).
+    const _analyticTxEnd = (() => {
+      const dates = [];
+      if (usAtkEnabled && isFinite(effUsAtkStrikeDate)) dates.push(effUsAtkStrikeDate);
+      if (cnAtkEnabled && isFinite(effCnAtkStrikeDate)) dates.push(effCnAtkStrikeDate);
+      return dates.length > 0 ? Math.min(...dates) : Infinity;
+    })();
+    const _analyticTsmcStrike = (tsmcDestroyed && cnAtkEnabled);
+    const _analyticSmicStrike = (usStrikeCnFabs && usAtkEnabled);
+    // Per-country supply-chain config for analytical strike outcome.
+    const _analyticCsFor = (country) => {
+      if (country === "US" && cnAtkSCActive) {
+        return { strikeYear: cnAtkStrikeDate, scFactor: usSCFactor, tsmcStrike: _analyticTsmcStrike };
+      }
+      if (country === "China" && usAtkSCActive) {
+        return { strikeYear: cnSCStrikeDate, scFactor: cnSCFactor, tsmcStrike: _analyticTsmcStrike, smicStrike: _analyticSmicStrike };
+      }
+      if (country === "Ally" && cnAtkSCActive) {
+        return { strikeYear: cnAtkStrikeDate, scFactor: usSCFactor, tsmcStrike: _analyticTsmcStrike };
+      }
+      return null;
+    };
+
     const computeStats = (country, natEnabled, natDate, effThreshold, effStrikeDate, scActive, countryDiffusion, diffusionRefFn, preempt) => {
       // === BASELINE: uses original (unreduced) data ===
       const all = points.filter(pt=>pt.country===country);
@@ -2502,7 +2745,85 @@ export default function App() {
         milestoneDatesAttack[m.key] = attackDone;
       }
 
-      return { total:totalSites, disabled:disabledSites.length, disabledGPUs, totalGPUs, preempted:preemptedSites.length, preemptedGPUs, preemptedEffective, preemptedEffectiveGPUs, largest, earliestDone, frozenYears, bestCluster, bestStrategy, attackStart, attackPreEnd, baselineDone, baselineCluster, baselineStrategy, baselineStart, baselinePreEnd, attackDelay, scenario, fractionAtStrike, baselineAlgoSeries, attackAlgoSeries, baselineRateSeries, attackRateSeries, algoRates, milestoneDates, milestoneDatesAttack, _attackCompanyFn: attackCompFn, _timelines: { baseline: _baselineTL, attack: _attackTL, scOnly: _scOnlyTL }, _country: country };
+      // === ANALYTICAL STRIKE METRICS ===
+      // Replace cluster-iteration metrics (disabled, disabledGPUs, preempted,
+      // preemptedGPUs, preemptedEffective, preemptedEffectiveGPUs, totalSites,
+      // totalGPUs) with deterministic expected values over the bucket model.
+      // The cluster-iteration metrics above are still used for internal logic
+      // (hasHits, scenario branching, bestCompletionV2 search) — those stay
+      // sampled-based since they need cluster identities.
+      //
+      // Counts are kept fractional internally (more accurate); display sites
+      // use Math.ceil for whole-cluster rendering.
+      //
+      // Guard: if scSites is empty (e.g., showAllGroups=false filtered out
+      // Ally/Other), keep zeros to preserve the existing UI-conditional behavior.
+      let outDisabled = disabledSites.length;
+      let outDisabledGPUs = disabledGPUs;
+      let outTotalGPUs = totalGPUs;
+      let outTotalSites = totalSites;
+      let outPreempted = preemptedSites.length;
+      let outPreemptedGPUs = preemptedGPUs;
+      let outPreemptedEffective = preemptedEffective;
+      let outPreemptedEffectiveGPUs = preemptedEffectiveGPUs;
+      let outDisabledExact = disabledSites.length;
+      let outTotalSitesExact = totalSites;
+      let outPreemptedExact = preemptedSites.length;
+      let outPreemptedEffExact = preemptedEffective;
+      if (scSites.length > 0) {
+        const _analyticCs = scActive ? _analyticCsFor(country) : null;
+        // For "preempted" (full count), no cutoff. For "preemptedEffective", use
+        // training-completion cutoff so post-strike clusters built after the run
+        // ends don't count.
+        const _aFull = analyticalStrikeOutcome(
+          country, effThreshold, effStrikeDate, preempt, _analyticCs,
+          _analyticTxEnd, Infinity);
+        const _aEff = analyticalStrikeOutcome(
+          country, effThreshold, effStrikeDate, preempt, _analyticCs,
+          _analyticTxEnd, preemptCutoff);
+        outDisabledExact = _aFull.destroyedCount;
+        outDisabled = Math.ceil(_aFull.destroyedCount);
+        outDisabledGPUs = _aFull.destroyedCompute;
+        outTotalSitesExact = _aFull.totalCount;
+        outTotalSites = Math.ceil(_aFull.totalCount);
+        outTotalGPUs = _aFull.totalCompute;
+        outPreemptedExact = _aFull.preemptedCount;
+        outPreempted = Math.ceil(_aFull.preemptedCount);
+        outPreemptedGPUs = _aFull.preemptedCompute;
+        outPreemptedEffExact = _aEff.preemptedCount;
+        outPreemptedEffective = Math.ceil(_aEff.preemptedCount);
+        outPreemptedEffectiveGPUs = _aEff.preemptedCompute;
+
+        if (typeof window !== 'undefined' && window._maimDebugAnalytic) {
+          const pctSampled = totalGPUs > 0 ? (disabledGPUs / totalGPUs * 100) : 0;
+          const pctAnalytic = _aFull.totalCompute > 0
+            ? (_aFull.destroyedCompute / _aFull.totalCompute * 100) : 0;
+          // eslint-disable-next-line no-console
+          console.log(`[analytic] ${country} T=${effThreshold} strike=${effStrikeDate.toFixed(2)}`, {
+            sampled: {
+              disabled: disabledSites.length,
+              disabledGPUs: Math.round(disabledGPUs),
+              totalGPUs: Math.round(totalGPUs),
+              pctDestroyed: pctSampled.toFixed(1) + '%',
+              preempted: preemptedSites.length,
+              preemptedEffective,
+              totalSites,
+            },
+            analytic: {
+              disabled: outDisabled,
+              disabledExact: outDisabledExact.toFixed(2),
+              disabledGPUs: Math.round(outDisabledGPUs),
+              totalGPUs: Math.round(outTotalGPUs),
+              pctDestroyed: pctAnalytic.toFixed(1) + '%',
+              preempted: outPreempted,
+              preemptedEffective: outPreemptedEffective,
+              totalSites: outTotalSites,
+            },
+          });
+        }
+      }
+
+      return { total: outTotalSites, totalExact: outTotalSitesExact, disabled: outDisabled, disabledExact: outDisabledExact, disabledGPUs: outDisabledGPUs, totalGPUs: outTotalGPUs, preempted: outPreempted, preemptedExact: outPreemptedExact, preemptedGPUs: outPreemptedGPUs, preemptedEffective: outPreemptedEffective, preemptedEffectiveExact: outPreemptedEffExact, preemptedEffectiveGPUs: outPreemptedEffectiveGPUs, largest, earliestDone, frozenYears, bestCluster, bestStrategy, attackStart, attackPreEnd, baselineDone, baselineCluster, baselineStrategy, baselineStart, baselinePreEnd, attackDelay, scenario, fractionAtStrike, baselineAlgoSeries, attackAlgoSeries, baselineRateSeries, attackRateSeries, algoRates, milestoneDates, milestoneDatesAttack, _attackCompanyFn: attackCompFn, _timelines: { baseline: _baselineTL, attack: _attackTL, scOnly: _scOnlyTL }, _country: country };
     };
 
     // Compute US first so we can extract its actual company compute for CN diffusion
@@ -3543,6 +3864,10 @@ export default function App() {
                 </span>
               );
             })()}
+          </div>
+          <div style={{ fontSize:10, color:"#475569", fontStyle:"italic", marginTop:6, textAlign:"center" }}>
+            Cluster dots are sampled from the bucket distributions for visualization;
+            reported strike metrics are computed from the underlying expected values.
           </div>
           </>;
           })()}
