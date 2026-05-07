@@ -3287,6 +3287,238 @@ export default function App() {
   }, [rate]);
 
   // Export PNG: dynamically load html2canvas and capture a section
+  // Render the per-country milestone timeline plot to a PNG and trigger download.
+  // Light-theme: white background, baseline=US-blue/CN-orange, post-strike=red dashed,
+  // delay arrows + labels between matching milestones. Mirrors the matplotlib version.
+  const exportMilestoneTimeline = () => {
+    const W = 1600, H = 800;
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const fmtDate = (y) => {
+      if (!isFinite(y) || y > 2050) return ">2050";
+      const yr = Math.floor(y), mo = Math.round((y - yr) * 12);
+      return `${MONTHS[Math.min(mo, 11)]} ${yr}`;
+    };
+
+    // Title
+    ctx.fillStyle = "#1e293b";
+    ctx.font = "bold 18px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      `Milestone arrival under strike (${fmtDate(effCnAtkStrikeDate)} CN strike on US, ${fmtDate(effUsAtkStrikeDate)} US strike on CN)`,
+      W / 2, 28
+    );
+
+    // Two panels side by side
+    const panelW = W / 2 - 20;
+    const panelH = H - 100;
+    const panels = [
+      { x0: 30, country: "US",    base: usS, atk: usS, strike: effCnAtkStrikeDate, color: "#3b82f6", title: "United States — capability arrival under CN strike" },
+      { x0: W / 2 + 10, country: "China", base: cnS, atk: cnS, strike: effUsAtkStrikeDate, color: "#d97706", title: "China — capability arrival under US strike" },
+    ];
+
+    panels.forEach(panel => {
+      const baseDates = MILESTONES.map(m => panel.base.milestoneDates?.[m.key] ?? null);
+      const atkDates  = MILESTONES.map(m => panel.atk.milestoneDatesAttack?.[m.key] ?? null);
+
+      const allDates = [...baseDates, ...atkDates].filter(d => d != null && isFinite(d));
+      if (allDates.length === 0) return;
+      const xMin = Math.min(...allDates) - 0.3;
+      const xMax = Math.max(...allDates) + 0.3;
+      const eflops = MILESTONES.map(m => Math.pow(10, m.feb2025Log10));
+      const yLogMin = Math.log10(Math.min(...eflops)) - 0.4;
+      const yLogMax = Math.log10(Math.max(...eflops)) + 0.4;
+
+      const PL = panel.x0 + 70, PR = panel.x0 + panelW - 30, PT = 70, PB = H - 50;
+      const xToPx = (x) => PL + (x - xMin) / (xMax - xMin) * (PR - PL);
+      const yToPx = (y) => PB - (Math.log10(y) - yLogMin) / (yLogMax - yLogMin) * (PB - PT);
+
+      // Panel border + title
+      ctx.fillStyle = "#1e293b";
+      ctx.font = "bold 13px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText(panel.title, (PL + PR) / 2, PT - 18);
+
+      // Y-axis log gridlines + labels at major decades
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.lineWidth = 1;
+      ctx.font = "11px system-ui";
+      ctx.textAlign = "right";
+      for (let exp = Math.ceil(yLogMin); exp <= Math.floor(yLogMax); exp++) {
+        const py = yToPx(Math.pow(10, exp));
+        ctx.beginPath();
+        ctx.moveTo(PL, py); ctx.lineTo(PR, py); ctx.stroke();
+        ctx.fillStyle = "#475569";
+        ctx.fillText(`10^${exp}`, PL - 6, py + 4);
+      }
+
+      // X-axis year gridlines + labels
+      ctx.textAlign = "center";
+      for (let yr = Math.ceil(xMin); yr <= Math.floor(xMax); yr++) {
+        const px = xToPx(yr);
+        ctx.strokeStyle = "#e2e8f0";
+        ctx.beginPath();
+        ctx.moveTo(px, PT); ctx.lineTo(px, PB); ctx.stroke();
+        ctx.fillStyle = "#475569";
+        ctx.fillText(`${yr}`, px, PB + 16);
+      }
+
+      // Plot border
+      ctx.strokeStyle = "#cbd5e1";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(PL, PT, PR - PL, PB - PT);
+
+      // Strike line (vertical dashed)
+      const strikePx = xToPx(panel.strike);
+      ctx.strokeStyle = "#475569";
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(strikePx, PT); ctx.lineTo(strikePx, PB); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#475569";
+      ctx.font = "11px system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText("  Strike", strikePx + 3, PT + 12);
+
+      // Baseline line + points
+      ctx.strokeStyle = panel.color;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      baseDates.forEach((d, i) => {
+        if (d == null || !isFinite(d)) return;
+        const px = xToPx(d), py = yToPx(eflops[i]);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      // Baseline markers
+      baseDates.forEach((d, i) => {
+        if (d == null || !isFinite(d)) return;
+        const px = xToPx(d), py = yToPx(eflops[i]);
+        ctx.fillStyle = panel.color;
+        ctx.beginPath();
+        ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.fill();
+        // Milestone label (above-left)
+        ctx.fillStyle = "#1e293b";
+        ctx.font = "bold 11px system-ui";
+        ctx.textAlign = "right";
+        ctx.fillText(MILESTONES[i].label, px - 9, py - 7);
+      });
+
+      // Post-strike line (dashed red): only segments after strike, with fork at strike-date
+      const atkPathPts = [];
+      // Find the y-value at the strike date by interpolating along baseline
+      let strikeY = null;
+      for (let i = 0; i < baseDates.length - 1; i++) {
+        if (baseDates[i] != null && baseDates[i + 1] != null && baseDates[i] < panel.strike && baseDates[i + 1] >= panel.strike) {
+          const f = (panel.strike - baseDates[i]) / (baseDates[i + 1] - baseDates[i]);
+          strikeY = Math.pow(10, Math.log10(eflops[i]) + f * (Math.log10(eflops[i + 1]) - Math.log10(eflops[i])));
+          break;
+        }
+      }
+      if (strikeY != null) atkPathPts.push([panel.strike, strikeY]);
+      atkDates.forEach((d, i) => {
+        if (d == null || !isFinite(d)) return;
+        if (d > panel.strike) atkPathPts.push([d, eflops[i]]);
+      });
+      if (atkPathPts.length >= 2) {
+        ctx.strokeStyle = "#dc2626";
+        ctx.setLineDash([8, 5]);
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        atkPathPts.forEach(([x, y], i) => {
+          const px = xToPx(x), py = yToPx(y);
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Post-strike markers (squares)
+      atkDates.forEach((d, i) => {
+        if (d == null || !isFinite(d) || d <= panel.strike) return;
+        const px = xToPx(d), py = yToPx(eflops[i]);
+        ctx.fillStyle = "#dc2626";
+        ctx.fillRect(px - 5, py - 5, 10, 10);
+      });
+
+      // Delay arrows + labels (horizontal)
+      ctx.strokeStyle = "#475569";
+      ctx.fillStyle = "#475569";
+      ctx.lineWidth = 1.4;
+      ctx.font = "bold 11px system-ui";
+      ctx.textAlign = "center";
+      baseDates.forEach((bd, i) => {
+        const ad = atkDates[i];
+        if (bd == null || ad == null || !isFinite(ad) || (ad - bd) <= 0.04) return;
+        const py = yToPx(eflops[i]);
+        const bx = xToPx(bd), ax = xToPx(ad);
+        // arrow line
+        ctx.beginPath();
+        ctx.moveTo(bx, py); ctx.lineTo(ax, py); ctx.stroke();
+        // arrowhead
+        const headSize = 6;
+        ctx.beginPath();
+        ctx.moveTo(ax, py); ctx.lineTo(ax - headSize, py - headSize / 2); ctx.lineTo(ax - headSize, py + headSize / 2);
+        ctx.closePath(); ctx.fill();
+        // label
+        const dly = ad - bd;
+        const label = dly >= 1.5 ? `+${dly.toFixed(1)} yr` : `+${(dly * 12).toFixed(0)} mo`;
+        ctx.fillText(label, (bx + ax) / 2, py - 6);
+      });
+
+      // Legend (bottom-right)
+      const lx = PR - 180, ly = PB - 50;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(lx - 8, ly - 18, 175, 50);
+      ctx.strokeStyle = "#cbd5e1";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(lx - 8, ly - 18, 175, 50);
+      ctx.font = "11px system-ui";
+      ctx.textAlign = "left";
+      // Baseline legend
+      ctx.strokeStyle = panel.color;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly - 4); ctx.lineTo(lx + 24, ly - 4); ctx.stroke();
+      ctx.fillStyle = panel.color;
+      ctx.beginPath();
+      ctx.arc(lx + 12, ly - 4, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#1e293b";
+      ctx.fillText("No-attack baseline", lx + 32, ly);
+      // Attack legend
+      ctx.strokeStyle = "#dc2626";
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(lx, ly + 14); ctx.lineTo(lx + 24, ly + 14); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#dc2626";
+      ctx.fillRect(lx + 8, ly + 10, 8, 8);
+      ctx.fillStyle = "#1e293b";
+      ctx.fillText("Post-strike", lx + 32, ly + 18);
+
+      // Y-axis label (rotated)
+      ctx.save();
+      ctx.translate(panel.x0 + 18, (PT + PB) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#475569";
+      ctx.font = "12px system-ui";
+      ctx.fillText("Effective FLOP at milestone (Feb-2025 reference)", 0, 0);
+      ctx.restore();
+    });
+
+    // Trigger download
+    const link = document.createElement("a");
+    link.download = "maim-milestone-timeline.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+
   const exportPNG = async (elementId, filename) => {
     const el = document.getElementById(elementId);
     if (!el) return;
@@ -3375,6 +3607,10 @@ export default function App() {
               style={{ fontSize:10, padding:"5px 10px", background:"#1e293b", color:"#94a3b8", border:"1px solid #334155", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)" }}>
               Export Scatter + Timeline
             </button>
+            <button onClick={() => exportMilestoneTimeline()}
+              style={{ fontSize:10, padding:"5px 10px", background:"#ffffff", color:"#1e293b", border:"1px solid #cbd5e1", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)", fontWeight:600 }}>
+              Export Milestone Timeline
+            </button>
           </div>
         </div>
 
@@ -3432,7 +3668,7 @@ export default function App() {
                       const fmt = (d) => {
                         if (d == null || !isFinite(d)) return "—";
                         const y = Math.floor(d);
-                        const m = Math.min(11, Math.max(0, Math.floor((d - y) * 12)));
+                        const m = Math.min(11, Math.max(0, Math.round((d - y) * 12)));
                         return `${_MONTHS[m]} ${y}`;
                       };
                       return (
