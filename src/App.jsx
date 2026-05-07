@@ -646,10 +646,19 @@ function capBuildShares(shares, maxSize) {
 // All blocs share the AIFP frontier cap. Per-bloc cluster size constraints emerge
 // naturally from compute share: smaller blocs have smaller new-build budgets, so they
 // sample fewer clusters from the same lognormal and the max-of-N is naturally smaller.
-// Empirically (Epoch end-2025): largest CN cluster / largest US cluster ≈ 0.14, which
-// matches the natural same-distribution prediction (~0.18) better than any explicit
-// per-bloc max multiplier.
 const SIM_MAX_MULTIPLIER = { US: 1.0, China: 1.0, Ally: 1.0, Other: 1.0 };
+
+// Per-bloc DISTRIBUTION-SHAPE lag (in years). Compute totals are unchanged; only
+// the SHAPE of the buildout (cluster-size distribution and per-year cluster-size cap)
+// shifts to an earlier year. Reflects buildout-strategy differences — fewer Chinese
+// hyperscalers concentrating into mega-clusters, East-Data-West-Compute regional
+// dispersion, provincial grid-capacity limits — not chip quality or compute totals
+// (those are handled separately via country shares).
+const BLOC_SHAPE_LAG = { US: 0, China: 1, Ally: 0, Other: 0 };
+function laggedYear(country, year) {
+  return Math.max(2023, year - (BLOC_SHAPE_LAG[country] || 0));
+}
+
 
 const SIM_COUNTRY_SHARES = SHARES_NOW;
 
@@ -874,7 +883,11 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
     const baseNewGlobal = globalTotal - prevTotal;
     if (baseNewGlobal <= 0) continue;
 
-    const baseGlobalMax = getMaxCluster(year);
+    // Distribution-shape lag: country-specific. CN's bucket shares and cluster cap
+    // come from an earlier year (BLOC_SHAPE_LAG[country] years prior). Compute totals
+    // are not lagged — only the SHAPE of the distribution shifts.
+    const shapeYear = laggedYear(country, year);
+    const baseGlobalMax = getMaxCluster(shapeYear);
 
     // Match scPoints' hybrid: pre-SC-floor years use original generation params,
     // strike year + later use SC-adjusted generation params.
@@ -910,7 +923,7 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
     const gap = newCountry - existingNewSum;
     if (gap < 1000) continue;  // sampler skip threshold
 
-    const rawShares = getNewBuildShares(year);
+    const rawShares = getNewBuildShares(shapeYear);
     const buildShares = capBuildShares(rawShares, countryMax);
 
     const existingFrac = _analyticExistingFrac(year, strikeDate);
@@ -973,6 +986,11 @@ function generateSimulatedClusters(countryStrikes, transitionEndYear) {
     const baseGlobalMax = getMaxCluster(year);
 
     for (const country of countries) {
+      // Distribution-shape lag (per-bloc). See BLOC_SHAPE_LAG above.
+      const shapeYear = laggedYear(country, year);
+      const baseGlobalMaxLagged = getMaxCluster(shapeYear);
+      const rawSharesLagged = getNewBuildShares(shapeYear);
+
       // Per-country SC: US clusters attacked by CN, CN clusters attacked by US
       const cs = countryStrikes && countryStrikes[country];
       // Pro-rate within the strike year: builds before strike proceed at full rate
@@ -997,11 +1015,11 @@ function generateSimulatedClusters(countryStrikes, transitionEndYear) {
 
       const effScF = baseNewGlobal > 0 ? newGlobal / baseNewGlobal : 1.0;
       const globalMax = isAnyPostStrike
-        ? Math.round(baseGlobalMax * Math.max(effScF, 0.15))
-        : baseGlobalMax;
+        ? Math.round(baseGlobalMaxLagged * Math.max(effScF, 0.15))
+        : baseGlobalMaxLagged;
 
       const countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
-      const buildShares = capBuildShares(rawShares, countryMax);
+      const buildShares = capBuildShares(rawSharesLagged, countryMax);
       const yearShares = getCountryShares(year, txEnd);
       const newCountry = newGlobal * yearShares[country];
       const existingNew = CLUSTERS
