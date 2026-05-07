@@ -3467,8 +3467,7 @@ export default function App() {
         ctx.closePath(); ctx.fill();
         // label
         const dly = ad - bd;
-        const label = dly >= 1.5 ? `+${dly.toFixed(1)} yr` : `+${(dly * 12).toFixed(0)} mo`;
-        ctx.fillText(label, (bx + ax) / 2, py - 6);
+        ctx.fillText(`+${dly.toFixed(1)} yr`, (bx + ax) / 2, py - 6);
       });
 
       // Legend (bottom-right)
