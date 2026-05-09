@@ -1463,6 +1463,208 @@ function MetricBox({label,value,sub,warn,good,highlight}) {
   );
 }
 
+// Render the per-country milestone timeline to a canvas context. Used both by the
+// embedded chart (dark theme) and the PNG export (light theme).
+function renderMilestoneTimelineCanvas(ctx, W, H, opts) {
+  const { usS, cnS, strikeUsDate, strikeCnDate, theme = "dark", showHeader = false, headerText = "" } = opts;
+  const T = theme === "dark" ? {
+    bg: "transparent", text: "#e2e8f0", textSubtle: "#94a3b8", grid: "#1e293b",
+    panelBorder: "#334155", usColor: "#60a5fa", cnColor: "#fbbf24",
+    atkColor: "#f87171", strikeColor: "#94a3b8", arrowColor: "#cbd5e1",
+    labelText: "#cbd5e1",
+  } : {
+    bg: "#ffffff", text: "#1e293b", textSubtle: "#475569", grid: "#e2e8f0",
+    panelBorder: "#cbd5e1", usColor: "#3b82f6", cnColor: "#d97706",
+    atkColor: "#dc2626", strikeColor: "#475569", arrowColor: "#475569",
+    labelText: "#1e293b",
+  };
+  if (T.bg !== "transparent") { ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H); }
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const fmtDate = (y) => {
+    if (!isFinite(y) || y > 2050) return ">2050";
+    const yr = Math.floor(y), mo = Math.round((y - yr) * 12);
+    return `${MONTHS[Math.min(mo, 11)]} ${yr}`;
+  };
+
+  let topPad = 36;
+  if (showHeader && headerText) {
+    ctx.fillStyle = T.text;
+    ctx.font = "bold 16px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(headerText, W / 2, 24);
+    topPad = 48;
+  }
+
+  const panels = [
+    { country: "US", color: T.usColor, s: usS, strike: strikeCnDate, x0: 24, title: "United States — capability arrival under CN strike" },
+    { country: "China", color: T.cnColor, s: cnS, strike: strikeUsDate, x0: W / 2 + 6, title: "China — capability arrival under US strike" },
+  ];
+  const panelW = W / 2 - 30;
+
+  panels.forEach(panel => {
+    const baseDates = MILESTONES.map(m => panel.s.milestoneDates?.[m.key] ?? null);
+    const atkDates  = MILESTONES.map(m => panel.s.milestoneDatesAttack?.[m.key] ?? null);
+    const allDates = [...baseDates, ...atkDates].filter(d => d != null && isFinite(d));
+    if (allDates.length === 0) return;
+    const xMin = Math.min(...allDates) - 0.3;
+    const xMax = Math.max(...allDates) + 0.5;
+    const eflops = MILESTONES.map(m => Math.pow(10, m.feb2025Log10));
+    const yLogMin = Math.log10(Math.min(...eflops)) - 0.4;
+    const yLogMax = Math.log10(Math.max(...eflops)) + 0.4;
+
+    const PL = panel.x0 + 60, PR = panel.x0 + panelW - 18, PT = topPad + 22, PB = H - 38;
+    const xToPx = (x) => PL + (x - xMin) / (xMax - xMin) * (PR - PL);
+    const yToPx = (y) => PB - (Math.log10(y) - yLogMin) / (yLogMax - yLogMin) * (PB - PT);
+
+    ctx.fillStyle = T.text;
+    ctx.font = "bold 12px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText(panel.title, (PL + PR) / 2, PT - 8);
+
+    // Y gridlines + labels at decade boundaries
+    ctx.font = "10px system-ui";
+    ctx.textAlign = "right";
+    for (let exp = Math.ceil(yLogMin); exp <= Math.floor(yLogMax); exp++) {
+      const py = yToPx(Math.pow(10, exp));
+      ctx.strokeStyle = T.grid; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PL, py); ctx.lineTo(PR, py); ctx.stroke();
+      ctx.fillStyle = T.textSubtle;
+      ctx.fillText(`10^${exp}`, PL - 5, py + 3);
+    }
+
+    // X gridlines + year labels
+    ctx.textAlign = "center";
+    for (let yr = Math.ceil(xMin); yr <= Math.floor(xMax); yr++) {
+      const px = xToPx(yr);
+      ctx.strokeStyle = T.grid;
+      ctx.beginPath(); ctx.moveTo(px, PT); ctx.lineTo(px, PB); ctx.stroke();
+      ctx.fillStyle = T.textSubtle;
+      ctx.fillText(`${yr}`, px, PB + 14);
+    }
+
+    // Plot border
+    ctx.strokeStyle = T.panelBorder; ctx.lineWidth = 1.2;
+    ctx.strokeRect(PL, PT, PR - PL, PB - PT);
+
+    // Strike vertical line
+    if (panel.strike != null && isFinite(panel.strike) && panel.strike >= xMin && panel.strike <= xMax) {
+      const sx = xToPx(panel.strike);
+      ctx.strokeStyle = T.strikeColor;
+      ctx.setLineDash([5, 4]); ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(sx, PT); ctx.lineTo(sx, PB); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = T.strikeColor;
+      ctx.font = "10px system-ui"; ctx.textAlign = "left";
+      ctx.fillText(" Strike", sx + 2, PT + 10);
+    }
+
+    // Baseline line + points
+    ctx.strokeStyle = panel.color; ctx.lineWidth = 2;
+    ctx.beginPath();
+    let first = true;
+    baseDates.forEach((d, i) => {
+      if (d == null || !isFinite(d)) return;
+      const px = xToPx(d), py = yToPx(eflops[i]);
+      if (first) { ctx.moveTo(px, py); first = false; } else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    baseDates.forEach((d, i) => {
+      if (d == null || !isFinite(d)) return;
+      const px = xToPx(d), py = yToPx(eflops[i]);
+      ctx.fillStyle = panel.color;
+      ctx.beginPath(); ctx.arc(px, py, 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = T.labelText;
+      ctx.font = "bold 10px system-ui";
+      ctx.textAlign = "right";
+      ctx.fillText(MILESTONES[i].label, px - 7, py - 6);
+    });
+
+    // Post-strike line (dashed, forks at strike date)
+    let strikeY = null;
+    for (let i = 0; i < baseDates.length - 1; i++) {
+      if (baseDates[i] != null && baseDates[i + 1] != null && baseDates[i] < panel.strike && baseDates[i + 1] >= panel.strike) {
+        const f = (panel.strike - baseDates[i]) / (baseDates[i + 1] - baseDates[i]);
+        strikeY = Math.pow(10, Math.log10(eflops[i]) + f * (Math.log10(eflops[i + 1]) - Math.log10(eflops[i])));
+        break;
+      }
+    }
+    const atkPathPts = [];
+    if (strikeY != null) atkPathPts.push([panel.strike, strikeY]);
+    atkDates.forEach((d, i) => {
+      if (d == null || !isFinite(d)) return;
+      if (d > panel.strike) atkPathPts.push([d, eflops[i]]);
+    });
+    if (atkPathPts.length >= 2) {
+      ctx.strokeStyle = T.atkColor;
+      ctx.setLineDash([6, 4]); ctx.lineWidth = 2;
+      ctx.beginPath();
+      atkPathPts.forEach(([x, y], i) => {
+        const px = xToPx(x), py = yToPx(y);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    atkDates.forEach((d, i) => {
+      if (d == null || !isFinite(d) || d <= panel.strike) return;
+      const px = xToPx(d), py = yToPx(eflops[i]);
+      ctx.fillStyle = T.atkColor;
+      ctx.fillRect(px - 4, py - 4, 8, 8);
+    });
+
+    // Delay arrows + labels
+    ctx.strokeStyle = T.arrowColor;
+    ctx.fillStyle = T.arrowColor;
+    ctx.lineWidth = 1.2;
+    ctx.font = "bold 10px system-ui";
+    ctx.textAlign = "center";
+    baseDates.forEach((bd, i) => {
+      const ad = atkDates[i];
+      if (bd == null || ad == null || !isFinite(ad) || (ad - bd) <= 0.04) return;
+      const py = yToPx(eflops[i]);
+      const bx = xToPx(bd), ax = xToPx(ad);
+      ctx.beginPath(); ctx.moveTo(bx, py); ctx.lineTo(ax, py); ctx.stroke();
+      const head = 5;
+      ctx.beginPath();
+      ctx.moveTo(ax, py); ctx.lineTo(ax - head, py - head / 2); ctx.lineTo(ax - head, py + head / 2);
+      ctx.closePath(); ctx.fill();
+      const dly = ad - bd;
+      ctx.fillText(`+${dly.toFixed(1)} yr`, (bx + ax) / 2, py - 5);
+    });
+
+    // Y axis label
+    ctx.save();
+    ctx.translate(panel.x0 + 12, (PT + PB) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.fillStyle = T.textSubtle;
+    ctx.font = "10px system-ui";
+    ctx.fillText("Effective FLOP at milestone", 0, 0);
+    ctx.restore();
+  });
+}
+
+// Embedded React wrapper: renders the dark-themed milestone timeline chart.
+function MilestoneTimelineChart({ usS, cnS, strikeUsDate, strikeCnDate }) {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    // Use device pixel ratio for crispness
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = 1600, H = 480;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = "100%";
+    canvas.style.height = "auto";
+    canvas.style.display = "block";
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    renderMilestoneTimelineCanvas(ctx, W, H, { usS, cnS, strikeUsDate, strikeCnDate, theme: "dark" });
+  }, [usS, cnS, strikeUsDate, strikeCnDate]);
+  return <canvas ref={ref} />;
+}
+
 function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt, trainingRuns, width, height }) {
   // Each dot's threshold depends on who attacks it
   const thresholdFor = (country) => country === "China" ? usAtkThreshold : country === "US" || country === "Ally" ? cnAtkThreshold : 1e11;
@@ -3286,7 +3488,7 @@ export default function App() {
     return pts;
   }, [rate]);
 
-  // Export PNG: dynamically load html2canvas and capture a section
+
   // Render the per-country milestone timeline plot to a PNG and trigger download.
   // Light-theme: white background, baseline=US-blue/CN-orange, post-strike=red dashed,
   // delay arrows + labels between matching milestones. Mirrors the matplotlib version.
@@ -3597,10 +3799,6 @@ export default function App() {
             <button onClick={() => exportPNG("export-dashboard", "maim-dashboard.png")}
               style={{ fontSize:10, padding:"5px 10px", background:"#1e293b", color:"#94a3b8", border:"1px solid #334155", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)" }}>
               Export Inputs
-            </button>
-            <button onClick={() => exportPNG("export-outputs", "maim-outputs.png")}
-              style={{ fontSize:10, padding:"5px 10px", background:"#1e293b", color:"#94a3b8", border:"1px solid #334155", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)" }}>
-              Export Outputs
             </button>
             <button onClick={() => exportPNG("export-visuals", "maim-scatter-timeline.png")}
               style={{ fontSize:10, padding:"5px 10px", background:"#1e293b", color:"#94a3b8", border:"1px solid #334155", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)" }}>
@@ -3960,6 +4158,23 @@ export default function App() {
           );})}
         </div>
         </div>{/* end export-outputs */}
+
+        {/* Milestone arrival timeline — same chart as the PNG export, embedded.
+            Sits between the strike-outcome dashboard and the visualization
+            (training timeline + scatter + compute projections). */}
+        {(usS.milestoneDates && cnS.milestoneDates) && (
+          <div style={{ marginBottom:20, background:"rgba(15,23,42,0.5)", border:"1px solid #1e293b", borderRadius:8, padding:"14px 16px" }}>
+            <div style={{ fontSize:13, fontWeight:600, color:"#94a3b8", fontFamily:"var(--f)", marginBottom:8 }}>
+              Milestone arrival under strike
+            </div>
+            <MilestoneTimelineChart
+              usS={usS}
+              cnS={cnS}
+              strikeUsDate={effUsAtkStrikeDate}
+              strikeCnDate={effCnAtkStrikeDate}
+            />
+          </div>
+        )}
 
         <div id="export-visuals">
         {/* Training run timeline visualization */}
