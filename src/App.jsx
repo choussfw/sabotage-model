@@ -972,6 +972,42 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
   };
 }
 
+// Binary-search inverse of analyticalStrikeOutcome: given a target % of national
+// compute destroyed at strike, find the threshold T (in H100-eq) that achieves
+// it. Used by the "set strike by % destroyed" slider mode so the user can pick
+// a strike intensity directly in percentage terms rather than picking a
+// threshold and reading off the resulting destruction.
+// Expose analytical helpers on window so scripted sweeps can compute scenarios
+// without driving the UI. Keeps the React render loop out of the critical path.
+if (typeof window !== 'undefined') {
+  // Defer to a microtask so all module-level functions are defined first.
+  Promise.resolve().then(() => {
+    window.analyticalStrikeOutcome = analyticalStrikeOutcome;
+    window.analyticalSurvivingTimeline = analyticalSurvivingTimeline;
+    window.thresholdForPctDestroyed = thresholdForPctDestroyed;
+    window.AIFP_DATA = AIFP_DATA;
+    window.NOW = NOW;
+  });
+}
+
+function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, txEnd) {
+  if (pctTarget <= 0.01) return 1e11;        // ~0% destroyed: above max cluster
+  if (pctTarget >= 99.99) return 1000;       // ~100% destroyed: below min cluster
+  const targetFrac = pctTarget / 100;
+  let lo = 3, hi = 11;  // log10 bounds: 1K to 100B H100e
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    const T = Math.pow(10, mid);
+    const r = analyticalStrikeOutcome(country, T, strikeDate, preempt, cs, txEnd, Infinity);
+    const frac = r.totalCompute > 0 ? r.destroyedCompute / r.totalCompute : 0;
+    // Lower threshold catches more clusters → more destroyed. So if current frac
+    // is BELOW target, we need a LOWER threshold (catch more) → move hi down.
+    if (frac < targetFrac) hi = mid;
+    else lo = mid;
+  }
+  return Math.pow(10, (lo + hi) / 2);
+}
+
 // Build the post-strike surviving-compute trajectory analytically over the
 // bucket distribution, paralleling analyticalStrikeOutcome's scalar math but
 // producing a per-time-step time series. Drop-in replacement for
@@ -2532,11 +2568,18 @@ export default function App() {
   const [usAtkStrikeDate, setUsAtkStrikeDate] = useState(2031.0);
   const [usAtkEnabled, setUsAtkEnabled] = useState(true);
   const [usAtkPreempt, setUsAtkPreempt] = useState(true);
+  // Alternative selector for US attack: pick by % of CN compute destroyed instead
+  // of by cluster-size threshold. When usAtkPctMode is true, effUsAtkThreshold is
+  // derived from usAtkPctDestroyed via thresholdForPctDestroyed.
+  const [usAtkPctMode, setUsAtkPctMode] = useState(false);
+  const [usAtkPctDestroyed, setUsAtkPctDestroyed] = useState(50);
   // China first strike
   const [cnAtkThreshold, setCnAtkThreshold] = useState(500000);
   const [cnAtkStrikeDate, setCnAtkStrikeDate] = useState(2031.0);
   const [cnAtkEnabled, setCnAtkEnabled] = useState(true);
   const [cnAtkPreempt, setCnAtkPreempt] = useState(true);
+  const [cnAtkPctMode, setCnAtkPctMode] = useState(false);
+  const [cnAtkPctDestroyed, setCnAtkPctDestroyed] = useState(50);
 
   // Supply chain: China destroys TSMC in opening salvo, US retaliates with strikes on Chinese fabs
   const [tsmcDestroyed, setTsmcDestroyed] = useState(true);
@@ -2617,8 +2660,6 @@ export default function App() {
   const rate = halvingToRate(halvingMonths);
 
   // Per-attack effective values: US attacks CN, CN attacks US
-  const effUsAtkThreshold = usAtkEnabled ? usAtkThreshold : 1e11;
-  const effCnAtkThreshold = cnAtkEnabled ? cnAtkThreshold : 1e11;
   // Strike dates: if attack panel is off but SC blowback is active, use SC date (not NOW)
   const effCnAtkStrikeDate = cnAtkEnabled ? cnAtkStrikeDate : NOW;
   const effUsAtkStrikeDate = usAtkEnabled ? usAtkStrikeDate : NOW;
@@ -2641,6 +2682,35 @@ export default function App() {
   const usAtkSCActive = cnSCFactor < 1.0;  // anything hurts China supply
   // SC dates: TSMC follows CN strike, SMIC follows US strike
   const cnSCStrikeDate = Math.min(T ? cnAtkStrikeDate : Infinity, D ? usAtkStrikeDate : Infinity);
+
+  // Effective strike thresholds. When the user selects pct mode, the threshold
+  // is derived by inverting analyticalStrikeOutcome — given a target % of
+  // national compute destroyed at strike, find the cluster-size cutoff that
+  // produces it. Otherwise the threshold slider's value is used directly.
+  const effCnAtkThreshold = useMemo(() => {
+    if (!cnAtkEnabled) return 1e11;
+    if (!cnAtkPctMode) return cnAtkThreshold;
+    const tsmcStrike = tsmcDestroyed && cnAtkEnabled;
+    const csUs = cnAtkSCActive ? { strikeYear: cnAtkStrikeDate, scFactor: usSCFactor, tsmcStrike } : null;
+    const dates = [];
+    if (usAtkEnabled) dates.push(usAtkStrikeDate);
+    if (cnAtkEnabled) dates.push(cnAtkStrikeDate);
+    const txEnd = dates.length > 0 ? Math.min(...dates) : Infinity;
+    return thresholdForPctDestroyed("US", cnAtkPctDestroyed, effCnAtkStrikeDate, cnAtkPreempt, csUs, txEnd);
+  }, [cnAtkEnabled, cnAtkPctMode, cnAtkPctDestroyed, cnAtkThreshold, cnAtkStrikeDate, effCnAtkStrikeDate, cnAtkPreempt, cnAtkSCActive, usSCFactor, tsmcDestroyed, usAtkEnabled, usAtkStrikeDate]);
+
+  const effUsAtkThreshold = useMemo(() => {
+    if (!usAtkEnabled) return 1e11;
+    if (!usAtkPctMode) return usAtkThreshold;
+    const tsmcStrike = tsmcDestroyed && cnAtkEnabled;
+    const smicStrike = usStrikeCnFabs && usAtkEnabled;
+    const csCn = usAtkSCActive ? { strikeYear: cnSCStrikeDate, scFactor: cnSCFactor, tsmcStrike, smicStrike } : null;
+    const dates = [];
+    if (usAtkEnabled) dates.push(usAtkStrikeDate);
+    if (cnAtkEnabled) dates.push(cnAtkStrikeDate);
+    const txEnd = dates.length > 0 ? Math.min(...dates) : Infinity;
+    return thresholdForPctDestroyed("China", usAtkPctDestroyed, effUsAtkStrikeDate, usAtkPreempt, csCn, txEnd);
+  }, [usAtkEnabled, usAtkPctMode, usAtkPctDestroyed, usAtkThreshold, usAtkStrikeDate, effUsAtkStrikeDate, usAtkPreempt, usAtkSCActive, cnSCFactor, cnSCStrikeDate, tsmcDestroyed, usStrikeCnFabs, cnAtkEnabled, cnAtkStrikeDate]);
   // SC extra fab targets
   // US (TSMC) target count: 8 today (2026) — leading-edge Taiwan fabs + Arizona ramp.
   // +1 every 2 years (matches CN scaling rate) as Fab 21 Arizona / AP7 / Kumamoto / new packaging come online.
@@ -3911,6 +3981,195 @@ export default function App() {
     link.click();
   };
 
+  // Export the Algorithmic Progress Rate chart to a clean white-background PNG.
+  // Mirrors the in-app ProjectionChart for the rate series, but draws directly
+  // to canvas (no DOM capture) for sharp print-quality output.
+  const exportAlgoRateChart = () => {
+    // === Compute series (parallels the IIFE that renders the on-screen chart) ===
+    const sampleBackendRate = (id) => {
+      const fn = remoteRateFns[id];
+      if (!fn) return null;
+      const isCn = id.startsWith("China-");
+      const usFn = isCn && diffusion > 0 ? remoteRateFns[id.replace("China-", "US-")] : null;
+      const out = [];
+      for (let yr = 2024; yr <= 2040 + 1e-9; yr += 0.1) {
+        let v = fn(yr);
+        if (usFn) {
+          const usR = Math.max(0, usFn(yr) || 0);
+          const cnR = Math.max(0, v || 0);
+          v = Math.max(cnR, (1 - diffusion) * cnR + diffusion * usR);
+        }
+        if (Number.isFinite(v)) out.push([yr, v]);
+      }
+      return out;
+    };
+    const useBackend = useAifpBackend && backendStatus === "connected";
+    const fallback = (series) => (series || []).filter(d => d && d[1] > 0).map(d => [d[0], Math.log10(d[1])]);
+    const anyStrike = usAtkEnabled || cnAtkEnabled;
+    const usBase = (useBackend && sampleBackendRate("US-baseline")) || fallback(usS?.baselineRateSeries);
+    const cnBase = MODEL_CHINA ? ((useBackend && sampleBackendRate("China-baseline")) || fallback(cnS?.baselineRateSeries)) : [];
+    const usAtk = anyStrike ? ((useBackend && sampleBackendRate("US-attack")) || fallback(usS?.attackRateSeries)) : [];
+    const cnAtk = anyStrike && MODEL_CHINA ? ((useBackend && sampleBackendRate("China-attack")) || fallback(cnS?.attackRateSeries)) : [];
+    const all = [...usBase, ...cnBase, ...usAtk, ...cnAtk].filter(d => d[0] <= 2040);
+    if (all.length === 0) return;
+    const yMax = Math.max(2, Math.ceil(Math.max(...all.map(d => d[1]), 1) * 1.1));
+    const niceStep = yMax <= 2 ? 0.25 : yMax <= 4 ? 0.5 : yMax <= 8 ? 1 : 2;
+
+    const series = [
+      { data: usBase, color: "#3b82f6", label: "US baseline", dashed: false },
+      ...(MODEL_CHINA ? [{ data: cnBase, color: "#d97706", label: "CN baseline", dashed: false }] : []),
+      ...(anyStrike ? [{ data: usAtk, color: "#3b82f6", label: "US post-attack", dashed: true }] : []),
+      ...(anyStrike && MODEL_CHINA ? [{ data: cnAtk, color: "#d97706", label: "CN post-attack", dashed: true }] : []),
+    ];
+
+    // === Render to canvas ===
+    const W = 1400, H = 760;
+    const canvas = document.createElement("canvas");
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, W, H);
+
+    // Title + subtitle
+    ctx.fillStyle = "#1e293b";
+    ctx.font = "bold 20px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Algorithmic Progress Rate", W / 2, 36);
+    ctx.font = "13px system-ui";
+    ctx.fillStyle = "#475569";
+    ctx.fillText(
+      useBackend ? "Software-efficiency rate (OOM/yr at each month) — AIFP backend"
+                 : "Yearly software-efficiency growth rate (local model, OOM/yr)",
+      W / 2, 60
+    );
+
+    // Plot area
+    const PL = 90, PR = W - 60, PT = 100, PB = H - 90;
+    const xMin = 2024, xMax = 2040;
+    const xToPx = (x) => PL + (x - xMin) / (xMax - xMin) * (PR - PL);
+    const yToPx = (y) => PB - (y / yMax) * (PB - PT);
+
+    // Y gridlines + labels
+    ctx.font = "12px system-ui";
+    ctx.fillStyle = "#475569";
+    for (let v = 0; v <= yMax + 1e-9; v += niceStep) {
+      const py = yToPx(v);
+      ctx.strokeStyle = v === 0 ? "#94a3b8" : "#e2e8f0";
+      ctx.lineWidth = v === 0 ? 1.5 : 1;
+      ctx.beginPath();
+      ctx.moveTo(PL, py); ctx.lineTo(PR, py); ctx.stroke();
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#475569";
+      ctx.fillText(v.toFixed(niceStep < 1 ? 2 : 1), PL - 8, py + 4);
+    }
+
+    // X gridlines + labels
+    ctx.textAlign = "center";
+    for (let yr = 2024; yr <= 2040; yr += 2) {
+      const px = xToPx(yr);
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px, PT); ctx.lineTo(px, PB); ctx.stroke();
+      ctx.fillStyle = "#475569";
+      ctx.fillText(String(yr), px, PB + 22);
+    }
+
+    // Axes border
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(PL, PT, PR - PL, PB - PT);
+
+    // NOW line
+    const nowPx = xToPx(NOW);
+    if (nowPx >= PL && nowPx <= PR) {
+      ctx.strokeStyle = "#94a3b8";
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(nowPx, PT); ctx.lineTo(nowPx, PB); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "10px system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(" Now", nowPx + 2, PT + 14);
+    }
+
+    // Strike vertical lines
+    const strikeLines = [
+      ...(cnAtkEnabled ? [{ date: cnAtkStrikeDate, color: "#d97706", label: "CN→US strike" }] : []),
+      ...(usAtkEnabled ? [{ date: usAtkStrikeDate, color: "#3b82f6", label: "US→CN strike" }] : []),
+    ];
+    strikeLines.forEach((sl, i) => {
+      const px = xToPx(sl.date);
+      if (px < PL || px > PR) return;
+      ctx.strokeStyle = sl.color;
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px, PT); ctx.lineTo(px, PB); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = sl.color;
+      ctx.font = "11px system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(" " + sl.label, px + 2, PT + 28 + i * 14);
+    });
+
+    // Plot each series
+    series.forEach(s => {
+      if (!s.data || s.data.length === 0) return;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2.5;
+      if (s.dashed) ctx.setLineDash([6, 4]); else ctx.setLineDash([]);
+      ctx.beginPath();
+      let started = false;
+      for (const [x, y] of s.data) {
+        if (x < xMin || x > xMax) continue;
+        const px = xToPx(x), py = yToPx(Math.max(0, Math.min(yMax, y)));
+        if (!started) { ctx.moveTo(px, py); started = true; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+
+    // Legend (top-right)
+    const legendX = PR - 220, legendY = PT + 14;
+    ctx.font = "12px system-ui";
+    ctx.textAlign = "left";
+    series.forEach((s, i) => {
+      const ly = legendY + i * 20;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2.5;
+      if (s.dashed) ctx.setLineDash([6, 4]); else ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(legendX, ly); ctx.lineTo(legendX + 30, ly); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#1e293b";
+      ctx.fillText(s.label, legendX + 38, ly + 4);
+    });
+
+    // X axis label
+    ctx.fillStyle = "#475569";
+    ctx.font = "13px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText("Year", (PL + PR) / 2, H - 35);
+
+    // Y axis label
+    ctx.save();
+    ctx.translate(28, (PT + PB) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.fillText("OOM / year", 0, 0);
+    ctx.restore();
+
+    // Trigger download
+    const link = document.createElement("a");
+    link.download = "maim-algo-progress-rate.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+
   const exportPNG = async (elementId, filename) => {
     const el = document.getElementById(elementId);
     if (!el) return;
@@ -3998,6 +4257,10 @@ export default function App() {
             <button onClick={() => exportMilestoneTimeline()}
               style={{ fontSize:10, padding:"5px 10px", background:"#ffffff", color:"#1e293b", border:"1px solid #cbd5e1", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)", fontWeight:600 }}>
               Export Milestone Timeline
+            </button>
+            <button onClick={() => exportAlgoRateChart()}
+              style={{ fontSize:10, padding:"5px 10px", background:"#ffffff", color:"#1e293b", border:"1px solid #cbd5e1", borderRadius:4, cursor:"pointer", fontFamily:"var(--f)", fontWeight:600 }}>
+              Export Algo Progress Rate
             </button>
           </div>
         </div>
@@ -4208,6 +4471,9 @@ export default function App() {
               ...(MODEL_CHINA ? [{ label: "US strikes China", color: "#3b82f6", borderColor: "#3b82f622",
                 enabled: usAtkEnabled, setEnabled: setUsAtkEnabled,
                 threshold: usAtkThreshold, setThreshold: setUsAtkThreshold,
+                pctMode: usAtkPctMode, setPctMode: setUsAtkPctMode,
+                pctDestroyed: usAtkPctDestroyed, setPctDestroyed: setUsAtkPctDestroyed,
+                effThreshold: effUsAtkThreshold,
                 sd: usAtkStrikeDate, setSd: setUsAtkStrikeDate,
                 preempt: usAtkPreempt, setPreempt: setUsAtkPreempt,
                 nat: { label: "CN Nationalization", enabled: cnNatEnabled, setEnabled: setCnNatEnabled, date: cnNatDate, setDate: setCnNatDate, color: "#d97706" },
@@ -4227,6 +4493,9 @@ export default function App() {
               { label: "China strikes US", color: "#d97706", borderColor: "#d9770622",
                 enabled: cnAtkEnabled, setEnabled: setCnAtkEnabled,
                 threshold: cnAtkThreshold, setThreshold: setCnAtkThreshold,
+                pctMode: cnAtkPctMode, setPctMode: setCnAtkPctMode,
+                pctDestroyed: cnAtkPctDestroyed, setPctDestroyed: setCnAtkPctDestroyed,
+                effThreshold: effCnAtkThreshold,
                 sd: cnAtkStrikeDate, setSd: setCnAtkStrikeDate,
                 preempt: cnAtkPreempt, setPreempt: setCnAtkPreempt,
                 nat: { label: "US Nationalization", enabled: usNatEnabled, setEnabled: setUsNatEnabled, date: usNatDate, setDate: setUsNatDate, color: "#3b82f6" },
@@ -4250,19 +4519,44 @@ export default function App() {
                   {atk.label}
                 </label>
                 <div style={{ opacity: atk.enabled ? 1 : 0.3, pointerEvents: atk.enabled ? "auto" : "none" }}>
-                  <Slider label="Sabotage threshold (H100-equivalents)"
-                    hint="Clusters at or above this size (in H100e) are targeted."
-                    value={atk.threshold>=1e11?100000000:atk.threshold} onChange={atk.setThreshold}
-                    min={10000} max={100000000} step={10000} logScale format={v=>atk.threshold>=1e11?"OFF":F(v)} />
-                  <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:-4, marginBottom:8 }}>
-                    <Btn active={atk.threshold>=1e11} onClick={()=>atk.setThreshold(1e11)}>None</Btn>
-                    <Btn active={atk.threshold===10000} onClick={()=>atk.setThreshold(10000)}>10K</Btn>
-                    <Btn active={atk.threshold===50000} onClick={()=>atk.setThreshold(50000)}>50K</Btn>
-                    <Btn active={atk.threshold===100000} onClick={()=>atk.setThreshold(100000)}>100K</Btn>
-                    <Btn active={atk.threshold===500000} onClick={()=>atk.setThreshold(500000)}>500K</Btn>
-                    <Btn active={atk.threshold===1000000} onClick={()=>atk.setThreshold(1000000)}>1M</Btn>
-                    <Btn active={atk.threshold===5000000} onClick={()=>atk.setThreshold(5000000)}>5M</Btn>
-                  </div>
+                  <label style={{ fontSize:10, color:"#94a3b8", fontFamily:"var(--f)", display:"flex", alignItems:"center", gap:6, cursor:"pointer", marginBottom:6, textTransform:"uppercase", letterSpacing:0.5 }}>
+                    <input type="checkbox" checked={atk.pctMode} onChange={e=>atk.setPctMode(e.target.checked)}
+                      style={{ accentColor: atk.color, width:12, height:12, cursor:"pointer" }} />
+                    Set by % of compute destroyed at strike
+                  </label>
+                  {atk.pctMode ? (
+                    <>
+                      <Slider label="National compute destroyed at strike"
+                        hint="Picks the cluster-size threshold that destroys this fraction of the defender's existing-at-strike compute. Mapped via the bucket model."
+                        value={atk.pctDestroyed} onChange={atk.setPctDestroyed}
+                        min={0} max={100} step={1} format={v=>`${v}% (≈ ${F(atk.effThreshold)} threshold)`} />
+                      <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:-4, marginBottom:8 }}>
+                        <Btn active={atk.pctDestroyed===0} onClick={()=>atk.setPctDestroyed(0)}>0%</Btn>
+                        <Btn active={atk.pctDestroyed===10} onClick={()=>atk.setPctDestroyed(10)}>10%</Btn>
+                        <Btn active={atk.pctDestroyed===25} onClick={()=>atk.setPctDestroyed(25)}>25%</Btn>
+                        <Btn active={atk.pctDestroyed===50} onClick={()=>atk.setPctDestroyed(50)}>50%</Btn>
+                        <Btn active={atk.pctDestroyed===75} onClick={()=>atk.setPctDestroyed(75)}>75%</Btn>
+                        <Btn active={atk.pctDestroyed===90} onClick={()=>atk.setPctDestroyed(90)}>90%</Btn>
+                        <Btn active={atk.pctDestroyed===99} onClick={()=>atk.setPctDestroyed(99)}>99%</Btn>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Slider label="Sabotage threshold (H100-equivalents)"
+                        hint="Clusters at or above this size (in H100e) are targeted."
+                        value={atk.threshold>=1e11?100000000:atk.threshold} onChange={atk.setThreshold}
+                        min={10000} max={100000000} step={10000} logScale format={v=>atk.threshold>=1e11?"OFF":F(v)} />
+                      <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:-4, marginBottom:8 }}>
+                        <Btn active={atk.threshold>=1e11} onClick={()=>atk.setThreshold(1e11)}>None</Btn>
+                        <Btn active={atk.threshold===10000} onClick={()=>atk.setThreshold(10000)}>10K</Btn>
+                        <Btn active={atk.threshold===50000} onClick={()=>atk.setThreshold(50000)}>50K</Btn>
+                        <Btn active={atk.threshold===100000} onClick={()=>atk.setThreshold(100000)}>100K</Btn>
+                        <Btn active={atk.threshold===500000} onClick={()=>atk.setThreshold(500000)}>500K</Btn>
+                        <Btn active={atk.threshold===1000000} onClick={()=>atk.setThreshold(1000000)}>1M</Btn>
+                        <Btn active={atk.threshold===5000000} onClick={()=>atk.setThreshold(5000000)}>5M</Btn>
+                      </div>
+                    </>
+                  )}
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:3 }}>
                     <span style={{ fontSize:10, color:"#94a3b8", fontFamily:"var(--f)", textTransform:"uppercase", letterSpacing:0.5 }}>Strike date</span>
                     <span style={{ fontSize:13, color:"#e2e8f0", fontFamily:"var(--f)", fontWeight:600 }}>{fmtDate(atk.sd)}</span>
