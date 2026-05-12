@@ -789,6 +789,81 @@ function _analyticExistingFrac(year, strikeDate) {
   return Math.max(0, Math.min(1, (cut - year) / 0.99));
 }
 
+// Per-year, per-bucket incremental new compute from REAL clusters,
+// deduplicated across multi-phase chains. Each cluster entry's `gpus` is the
+// chain's CUMULATIVE size at that phase (not the additive new compute), so
+// naively summing c.gpus per year double-counts every chain's earlier phases.
+// The correct "new compute added in year Y" is `max(phase.gpus in Y) -
+// max(phase.gpus before Y)`, summed across chains. Each increment is bucketed
+// by the phase's own cumulative size (the bucket the cluster is in AT that
+// phase). Returns Map<year, number[]> with one entry per SIM_BUCKETS bucket.
+function _bucketIndexForGpus(g) {
+  for (let i = 0; i < SIM_BUCKETS.length; i++) {
+    const [lo, hi] = SIM_BUCKETS[i];
+    if (g >= lo && g < hi) return i;
+  }
+  return SIM_BUCKETS.length - 1;
+}
+const _existingNewByYearAndBucketCache = new Map();
+function existingNewByYearAndBucketForCountry(country) {
+  if (_existingNewByYearAndBucketCache.has(country)) return _existingNewByYearAndBucketCache.get(country);
+  const chainPhases = new Map();
+  let standaloneIdx = 0;
+  for (const c of CLUSTERS) {
+    if (c.country !== country) continue;
+    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+    const key = c.chain >= 0 ? `c${c.chain}` : `s${standaloneIdx++}`;
+    if (!chainPhases.has(key)) chainPhases.set(key, []);
+    chainPhases.get(key).push(c);
+  }
+  const yearMap = new Map();
+  for (const phases of chainPhases.values()) {
+    phases.sort((a, b) => a.year - b.year);
+    let prevMax = 0;
+    for (const p of phases) {
+      const yr = Math.floor(p.year);
+      const newCompute = Math.max(0, p.gpus - prevMax);
+      if (newCompute > 0) {
+        const bi = _bucketIndexForGpus(p.gpus);
+        if (!yearMap.has(yr)) yearMap.set(yr, new Array(SIM_BUCKETS.length).fill(0));
+        yearMap.get(yr)[bi] += newCompute;
+      }
+      if (p.gpus > prevMax) prevMax = p.gpus;
+    }
+  }
+  _existingNewByYearAndBucketCache.set(country, yearMap);
+  return yearMap;
+}
+
+// Per-year total (sum across buckets) — convenience wrapper.
+function existingNewByYearForCountry(country) {
+  const m = existingNewByYearAndBucketForCountry(country);
+  const out = new Map();
+  for (const [yr, arr] of m.entries()) out.set(yr, arr.reduce((s, v) => s + v, 0));
+  return out;
+}
+
+// Bucket-aware subtraction: distribute newCountry across buckets via
+// buildShares, subtract real-cluster compute from the bucket each cluster
+// occupies, and spill any per-bucket overflow into the next-LARGER bucket.
+// Returns per-bucket SIM budget after real subtraction. Excess in the
+// largest bucket is dropped (cluster exceeds AIFP frontier cap).
+function simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares) {
+  const realByBucket = (existingNewByYearAndBucketForCountry(country).get(year) || new Array(SIM_BUCKETS.length).fill(0)).slice();
+  const budgets = buildShares.map(s => s * newCountry);
+  for (let b = 0; b < SIM_BUCKETS.length; b++) {
+    const real = realByBucket[b];
+    if (real <= budgets[b]) {
+      budgets[b] -= real;
+    } else {
+      const excess = real - budgets[b];
+      budgets[b] = 0;
+      if (b + 1 < SIM_BUCKETS.length) realByBucket[b + 1] += excess;
+    }
+  }
+  return budgets;
+}
+
 // Compute strike outcome metrics analytically over the bucket distribution.
 //   country     - "US" | "China" | "Ally" | "Other"
 //   threshold   - strike threshold in H100-eq
@@ -815,17 +890,6 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
   const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + 0.25 : Infinity;
   const scFloorYear = Math.floor(scEffStrike);
   const cutoff = strikeDate + 0.05;
-
-  // Pre-bucket real clusters by floor(year) for fast gap-subtraction lookup.
-  // Use raw cluster sizes here (gap subtraction matches sampler line 928 which
-  // sums raw c.gpus per year).
-  const realByYear = new Map();
-  for (const c of CLUSTERS) {
-    if (c.country !== country) continue;
-    const yr = Math.floor(c.year);
-    if (!realByYear.has(yr)) realByYear.set(yr, []);
-    realByYear.get(yr).push(c);
-  }
 
   // === Real clusters: deterministic contribution, GROUPED INTO SITES BY CHAIN ===
   // The sampler groups clusters by chain ID (matching scPoints/computeStats line 2329):
@@ -920,14 +984,14 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
       newCountry = newGlobal * yearShare;
     }
 
-    // Subtract existing real clusters from the budget (matching sampler line 928).
-    const realThisYear = realByYear.get(year) || [];
-    const existingNewSum = realThisYear.reduce((s, c) => s + c.gpus, 0);
-    const gap = newCountry - existingNewSum;
-    if (gap < 1000) continue;  // sampler skip threshold
-
+    // Per-bucket sim budgets: distribute newCountry × buildShares across
+    // buckets, then subtract each real cluster's incremental compute from
+    // the bucket it sits in (spilling overflow to the next-larger bucket).
     const rawShares = getNewBuildShares(shapeYear);
     const buildShares = capBuildShares(rawShares, countryMax);
+    const simBucketBudgets = simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
+    const totalSimBudget = simBucketBudgets.reduce((s, v) => s + v, 0);
+    if (totalSimBudget < 1000) continue;  // nothing left to allocate
 
     const existingFrac = _analyticExistingFrac(year, strikeDate);
     // For preempted compute: cluster must be built AFTER strike but BEFORE preemptCutoff.
@@ -939,26 +1003,23 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
       : _analyticExistingFrac(year, preemptCutoff);
     const postEffFrac = Math.max(0, cutoffFrac - existingFrac);
 
-    const preCompute = gap * existingFrac;
-    const postCompute = gap * postEffFrac;
-
     for (let bi = 0; bi < SIM_BUCKETS.length; bi++) {
       const [lo, rawHi] = SIM_BUCKETS[bi];
       const hi = Math.min(rawHi, countryMax);
-      if (hi <= lo || buildShares[bi] <= 0) continue;
+      if (hi <= lo || simBucketBudgets[bi] <= 0) continue;
 
       const fracAbove = _analyticFracAbove(threshold, lo, hi);
       const cntAbovePer = _analyticCountAbovePerCompute(threshold, lo, hi);
       const cntAllPer = _analyticCountAllPerCompute(lo, hi);
 
-      const preBucket = preCompute * buildShares[bi];
+      const preBucket = simBucketBudgets[bi] * existingFrac;
       destroyedCompute += preBucket * fracAbove;
       destroyedCount += preBucket * cntAbovePer;
       totalCompute += preBucket;
       totalCount += preBucket * cntAllPer;
 
       if (continuous) {
-        const postBucket = postCompute * buildShares[bi];
+        const postBucket = simBucketBudgets[bi] * postEffFrac;
         preemptedCompute += postBucket * fracAbove;
         preemptedCount += postBucket * cntAbovePer;
       }
@@ -1025,14 +1086,6 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
   const cut = strikeDate + 0.05;
 
   // === Real clusters: group into sites by chain, apply SC reduction, decide survival ===
-  const realByYear = new Map();
-  for (const c of CLUSTERS) {
-    if (c.country !== country) continue;
-    const yr = Math.floor(c.year);
-    if (!realByYear.has(yr)) realByYear.set(yr, []);
-    realByYear.get(yr).push(c);
-  }
-
   const realSiteMap = new Map();
   let _idx = 0;
   for (const c of CLUSTERS) {
@@ -1114,20 +1167,21 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
       newCountry = newGlobal * yearShare;
     }
 
-    const realThisYear = realByYear.get(year) || [];
-    const existingNewSum = realThisYear.reduce((s, c) => s + c.gpus, 0);
-    const gap = newCountry - existingNewSum;
-    if (gap < 1000) continue;
-
+    // Per-bucket sim budgets after subtracting real-cluster compute from the
+    // bucket each cluster sits in (overflow spills to next-larger bucket).
     const rawShares = getNewBuildShares(shapeYear);
     const buildShares = capBuildShares(rawShares, countryMax);
+    const simBucketBudgets = simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
+    const gap = simBucketBudgets.reduce((s, v) => s + v, 0);
+    if (gap < 1000) continue;
 
+    // destroyedFracInBuckets is the budget-weighted fracAbove across buckets.
     let destroyedFracInBuckets = 0;
     for (let bi = 0; bi < SIM_BUCKETS.length; bi++) {
       const [lo, rawHi] = SIM_BUCKETS[bi];
       const hi = Math.min(rawHi, countryMax);
-      if (hi <= lo || buildShares[bi] <= 0) continue;
-      destroyedFracInBuckets += buildShares[bi] * _analyticFracAbove(threshold, lo, hi);
+      if (hi <= lo || simBucketBudgets[bi] <= 0) continue;
+      destroyedFracInBuckets += (simBucketBudgets[bi] / gap) * _analyticFracAbove(threshold, lo, hi);
     }
 
     const existingFrac = _analyticExistingFrac(year, strikeDate);
@@ -1245,15 +1299,17 @@ function generateSimulatedClusters(countryStrikes, transitionEndYear) {
       const buildShares = capBuildShares(rawSharesLagged, countryMax);
       const yearShares = getCountryShares(year, txEnd);
       const newCountry = newGlobal * yearShares[country];
-      const existingNew = CLUSTERS
-        .filter(c => c.country === country && Math.floor(c.year) === year)
-        .reduce((s, c) => s + c.gpus, 0);
-      const gap = newCountry - existingNew;
-      if (gap < 1000) continue;
+      // Per-bucket sim budgets: subtract each real cluster's incremental
+      // compute from the bucket it sits in (overflow spills to next-larger
+      // bucket). Avoids the double-counting bug AND distributes the
+      // subtraction correctly across bucket sizes.
+      const simBucketBudgets = simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
+      const totalBudget = simBucketBudgets.reduce((s, v) => s + v, 0);
+      if (totalBudget < 1000) continue;
       const rng = mulberry32(hashStr(`${country}-${year}-v7`));
 
       for (let bi = 0; bi < SIM_BUCKETS.length; bi++) {
-        let budget = gap * buildShares[bi];
+        let budget = simBucketBudgets[bi];
         const [lo, rawHi] = SIM_BUCKETS[bi];
         const hi = Math.min(rawHi, countryMax);
         if (budget < lo || hi < lo) continue;
