@@ -1051,7 +1051,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, txEnd) {
+function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, txEnd, denialYears) {
   if (pctTarget <= 0.01) return 1e11;        // ~0% destroyed: above max cluster
   if (pctTarget >= 99.99) return 1000;       // ~100% destroyed: below min cluster
   const targetFrac = pctTarget / 100;
@@ -1059,7 +1059,8 @@ function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, t
   for (let i = 0; i < 30; i++) {
     const mid = (lo + hi) / 2;
     const T = Math.pow(10, mid);
-    const r = analyticalStrikeOutcome(country, T, strikeDate, preempt, cs, txEnd, Infinity);
+    const cutoff = preempt && denialYears != null ? strikeDate + denialYears : Infinity;
+    const r = analyticalStrikeOutcome(country, T, strikeDate, preempt, cs, txEnd, cutoff);
     const frac = r.totalCompute > 0 ? r.destroyedCompute / r.totalCompute : 0;
     // Lower threshold catches more clusters → more destroyed. So if current frac
     // is BELOW target, we need a LOWER threshold (catch more) → move hi down.
@@ -1080,10 +1081,15 @@ function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, t
 // analytical destroyed-fraction-above-threshold.
 //
 // Returns a function totalAt(t) returning total surviving compute online at t.
-function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous, cs, txEnd, tMin, tMax, step) {
+function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous, cs, txEnd, tMin, tMax, step, denialYears) {
   const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + 0.25 : Infinity;
   const scFloorYear = Math.floor(scEffStrike);
   const cut = strikeDate + 0.05;
+  // Denial window: continuous denial actively prevents new above-threshold
+  // builds for `denialYears` after the strike. After that, building resumes.
+  // When continuous is false, the window collapses to strike-day only.
+  const denialEnd = continuous ? strikeDate + (denialYears != null ? denialYears : Infinity) : strikeDate;
+  const denialEndPad = denialEnd + 0.05;
 
   // === Real clusters: group into sites by chain, apply SC reduction, decide survival ===
   const realSiteMap = new Map();
@@ -1100,21 +1106,22 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
     const key = c.chain >= 0 ? 'c' + c.chain : 's' + (_idx++);
     let site = realSiteMap.get(key);
     if (!site) {
-      site = { phases: [], maxGpus: 0, maxExistingGpus: 0 };
+      site = { phases: [], maxGpus: 0, maxExistingGpus: 0, maxInDenialWindow: 0 };
       realSiteMap.set(key, site);
     }
     site.phases.push({ year: c.year, gpus });
     if (gpus > site.maxGpus) site.maxGpus = gpus;
     if (c.year <= cut && gpus > site.maxExistingGpus) site.maxExistingGpus = gpus;
+    if (c.year <= denialEndPad && gpus > site.maxInDenialWindow) site.maxInDenialWindow = gpus;
   }
 
   // Surviving-real events: for each site that wasn't destroyed, emit per-phase
   // deltas (matching buildComputeTimeline's max-phase-per-site accumulation).
+  // A site is destroyed if its compute crosses threshold within the denial window
+  // (which equals the pre-strike window when continuous=false).
   const realEvents = [];
   for (const site of realSiteMap.values()) {
-    const destroyed = continuous
-      ? site.maxGpus >= threshold
-      : site.maxExistingGpus >= threshold;
+    const destroyed = site.maxInDenialWindow >= threshold;
     if (destroyed) continue;
     const sorted = site.phases.slice().sort((a, b) => a.year - b.year);
     let curMax = 0;
@@ -1187,12 +1194,15 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
     const existingFrac = _analyticExistingFrac(year, strikeDate);
     // existing-at-strike compute that survives the strike (below threshold):
     const existingSurv = gap * existingFrac * (1 - destroyedFracInBuckets);
-    // post-strike compute that survives. Under continuous denial, above-threshold
-    // post-strike clusters are preempted too; otherwise all post-strike compute
-    // is online (already SC-blended via newCountry).
-    const postSurv = continuous
-      ? gap * (1 - existingFrac) * (1 - destroyedFracInBuckets)
-      : gap * (1 - existingFrac);
+    // post-strike compute that survives. Split into the denial-window slice
+    // (above-threshold builds preempted) and the post-window slice (no denial).
+    // When continuous=false, denialEnd = strikeDate so inDenialFrac = 0 and the
+    // expression collapses to gap * (1 - existingFrac), matching the prior path.
+    const denialFracHere = continuous
+      ? Math.max(0, _analyticExistingFrac(year, denialEnd) - existingFrac)
+      : 0;
+    const postDenialFracHere = Math.max(0, (1 - existingFrac) - denialFracHere);
+    const postSurv = gap * (denialFracHere * (1 - destroyedFracInBuckets) + postDenialFracHere);
 
     yearContribs.push({
       year,
@@ -1944,7 +1954,7 @@ function MilestoneTimelineChart({ usS, cnS, strikeUsDate, strikeCnDate }) {
   return <canvas ref={ref} />;
 }
 
-function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt, trainingRuns, width, height }) {
+function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt, usAtkDenialYears, cnAtkDenialYears, trainingRuns, width, height }) {
   // Each dot's threshold depends on who attacks it
   const thresholdFor = (country) => country === "China" ? usAtkThreshold : country === "US" || country === "Ally" ? cnAtkThreshold : 1e11;
   const strikeDateFor = (country) => country === "China" ? usAtkStrikeDate : country === "US" || country === "Ally" ? cnAtkStrikeDate : NOW;
@@ -1975,19 +1985,11 @@ function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshol
     return s;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate]);
-  // Per-country training-completion cutoff. A cluster that comes online AFTER the
-  // post-strike training run completes isn't actually preempted in the model's
-  // calculation — it just doesn't matter for THIS run.
-  // Ally clusters are attacked by CN under the same threshold as US, so their
-  // preempt cutoff inherits the US training-run window.
-  const preemptCutoffFor = (country) => {
-    const targetCountry = country === "China" ? "China" : "US";
-    const tr = trainingRuns?.find(t => t.country === targetCountry);
-    if (!tr) return strikeDateFor(country) + 5;
-    return isFinite(tr.earliestDone) ? tr.earliestDone
-         : isFinite(tr.baselineDone) ? tr.baselineDone
-         : strikeDateFor(country) + 5;
-  };
+  // Per-country denial window: continuous denial actively prevents new
+  // above-threshold builds for `denialYears` after the strike. Clusters
+  // arriving after the window proceed normally and aren't marked preempted.
+  const denialYearsFor = (country) => country === "China" ? usAtkDenialYears : (cnAtkDenialYears ?? 1);
+  const preemptCutoffFor = (country) => strikeDateFor(country) + (denialYearsFor(country) ?? 1);
   // A cluster is PREEMPTED only if preempt is on, it's above threshold, comes
   // online AFTER the strike but BEFORE the post-strike training finishes, AND
   // its chain wasn't already destroyed pre-strike.
@@ -2005,7 +2007,7 @@ function Chart({ points, chainLinks, chainMembers, usAtkThreshold, cnAtkThreshol
     points.forEach(pt => { if(pt.chain >= 0 && isSab(pt)) s.add(pt.chain); });
     return s;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt, preStrikeDestroyedChains]);
+  }, [points, usAtkThreshold, cnAtkThreshold, usAtkStrikeDate, cnAtkStrikeDate, usAtkPreempt, cnAtkPreempt, usAtkDenialYears, cnAtkDenialYears, preStrikeDestroyedChains]);
   const mg = { top:25, right:30, bottom:50, left:70 };
   const w = width-mg.left-mg.right, h = height-mg.top-mg.bottom;
   const xMin=2022, xMax=2035.99, yMin=800, yMax=200000000;
@@ -2398,7 +2400,7 @@ function AllocationPie({ alloc, wartime, setWartime, accentColor, title, stats, 
   );
 }
 
-function TrainingTimeline({ usS, cnS, alpha, usStrikeDate, cnStrikeDate, usStrikeEnabled, cnStrikeEnabled, fmtDate, fmtDur }) {
+function TrainingTimeline({ usS, cnS, alpha, usStrikeDate, cnStrikeDate, usStrikeEnabled, cnStrikeEnabled, fmtDate, fmtDur, milestoneLabel }) {
   const hasUS = usS && usS.baselineStart && usS.baselineDone < Infinity;
   const hasCN = cnS && cnS.baselineStart && cnS.baselineDone < Infinity;
   if (!hasUS && !hasCN) return null;
@@ -2601,7 +2603,8 @@ function TrainingTimeline({ usS, cnS, alpha, usStrikeDate, cnStrikeDate, usStrik
           if (Math.abs(atkX - baseX) < 6) return null;
           const usAtkRow = rowPositions[1];
           const bracketY = usAtkRow + barH + 2;
-          const delayStr = usS.attackDelay < 1/12 ? `${(usS.attackDelay*365).toFixed(0)}d delay` : usS.attackDelay < 1 ? `${(usS.attackDelay*12).toFixed(1)}mo delay` : `${usS.attackDelay.toFixed(1)}yr delay`;
+          const baseDelayStr = usS.attackDelay < 1/12 ? `${(usS.attackDelay*365).toFixed(0)}d delay` : usS.attackDelay < 1 ? `${(usS.attackDelay*12).toFixed(1)}mo delay` : `${usS.attackDelay.toFixed(1)}yr delay`;
+          const delayStr = milestoneLabel ? `${baseDelayStr} (${milestoneLabel})` : baseDelayStr;
           return <text x={(baseX+atkX)/2} y={bracketY + 10} textAnchor="middle" fill="#f87171" fontSize={8} fontFamily="var(--f)" fontWeight={600} opacity={0.6}>{delayStr}</text>;
         })()}
       </svg>
@@ -2623,26 +2626,32 @@ export default function App() {
   const [usAtkThreshold, setUsAtkThreshold] = useState(500000);
   const [usAtkStrikeDate, setUsAtkStrikeDate] = useState(2031.0);
   const [usAtkEnabled, setUsAtkEnabled] = useState(true);
-  const [usAtkPreempt, setUsAtkPreempt] = useState(true);
+  const [usAtkPreempt, setUsAtkPreempt] = useState(false);
   // Alternative selector for US attack: pick by % of CN compute destroyed instead
   // of by cluster-size threshold. When usAtkPctMode is true, effUsAtkThreshold is
   // derived from usAtkPctDestroyed via thresholdForPctDestroyed.
-  const [usAtkPctMode, setUsAtkPctMode] = useState(false);
-  const [usAtkPctDestroyed, setUsAtkPctDestroyed] = useState(50);
+  const [usAtkPctMode, setUsAtkPctMode] = useState(true);
+  const [usAtkPctDestroyed, setUsAtkPctDestroyed] = useState(75);
+  // Duration (years) over which continuous denial actively prevents new
+  // above-threshold builds. After this window passes the strike date, normal
+  // building resumes. Decouples denial impact from the milestone horizon so
+  // strike effects are comparable across AC/SAR/...ASI.
+  const [usAtkDenialYears, setUsAtkDenialYears] = useState(1);
   // China first strike
   const [cnAtkThreshold, setCnAtkThreshold] = useState(500000);
   const [cnAtkStrikeDate, setCnAtkStrikeDate] = useState(2031.0);
   const [cnAtkEnabled, setCnAtkEnabled] = useState(true);
-  const [cnAtkPreempt, setCnAtkPreempt] = useState(true);
-  const [cnAtkPctMode, setCnAtkPctMode] = useState(false);
-  const [cnAtkPctDestroyed, setCnAtkPctDestroyed] = useState(50);
+  const [cnAtkPreempt, setCnAtkPreempt] = useState(false);
+  const [cnAtkPctMode, setCnAtkPctMode] = useState(true);
+  const [cnAtkPctDestroyed, setCnAtkPctDestroyed] = useState(75);
+  const [cnAtkDenialYears, setCnAtkDenialYears] = useState(1);
 
   // Supply chain: China destroys TSMC in opening salvo, US retaliates with strikes on Chinese fabs
   const [tsmcDestroyed, setTsmcDestroyed] = useState(true);
   const [usStrikeCnFabs, setUsStrikeCnFabs] = useState(true);
 
-  // TED-AI target in Feb-2025 eFLOP (4e34), shifted to March-2026 internal reference
-  const [flopExp, setFlopExp] = useState(Math.log10(4e34) - FLOP_EPOCH_SHIFT);
+  // SAR target in Feb-2025 eFLOP (1e33), shifted to March-2026 internal reference
+  const [flopExp, setFlopExp] = useState(Math.log10(1e33) - FLOP_EPOCH_SHIFT);
   const [eta, setEta] = useState(0.43);
   const [u, setU] = useState(0.90);
   const [alpha, setAlpha] = useState(0.5);
@@ -2695,6 +2704,16 @@ export default function App() {
   const [lastFetchedKey, setLastFetchedKey] = useState("");
 
   const [customFlop, setCustomFlop] = useState(false);
+
+  // Label for the currently-selected capability milestone (e.g. "SAR"), used
+  // to annotate the attack-caused delay so the reader knows which milestone
+  // it refers to. Null when the FLOP threshold is set to a custom value not
+  // matching a preset.
+  const activeMilestoneLabel = (() => {
+    if (customFlop) return null;
+    const m = MILESTONES.find(m => Math.abs(flopExp - feb2025ToInternalExp(m.feb2025Log10)) < 0.05);
+    return m ? m.label : null;
+  })();
 
     // Compute allocation fractions
   const ALLOC_PEACE = { experimental: 0.50, internal: 0.05, training: 0.08, customer: 0.37 };
@@ -2752,8 +2771,8 @@ export default function App() {
     if (usAtkEnabled) dates.push(usAtkStrikeDate);
     if (cnAtkEnabled) dates.push(cnAtkStrikeDate);
     const txEnd = dates.length > 0 ? Math.min(...dates) : Infinity;
-    return thresholdForPctDestroyed("US", cnAtkPctDestroyed, effCnAtkStrikeDate, cnAtkPreempt, csUs, txEnd);
-  }, [cnAtkEnabled, cnAtkPctMode, cnAtkPctDestroyed, cnAtkThreshold, cnAtkStrikeDate, effCnAtkStrikeDate, cnAtkPreempt, cnAtkSCActive, usSCFactor, tsmcDestroyed, usAtkEnabled, usAtkStrikeDate]);
+    return thresholdForPctDestroyed("US", cnAtkPctDestroyed, effCnAtkStrikeDate, cnAtkPreempt, csUs, txEnd, cnAtkDenialYears);
+  }, [cnAtkEnabled, cnAtkPctMode, cnAtkPctDestroyed, cnAtkThreshold, cnAtkStrikeDate, effCnAtkStrikeDate, cnAtkPreempt, cnAtkDenialYears, cnAtkSCActive, usSCFactor, tsmcDestroyed, usAtkEnabled, usAtkStrikeDate]);
 
   const effUsAtkThreshold = useMemo(() => {
     if (!usAtkEnabled) return 1e11;
@@ -2765,8 +2784,8 @@ export default function App() {
     if (usAtkEnabled) dates.push(usAtkStrikeDate);
     if (cnAtkEnabled) dates.push(cnAtkStrikeDate);
     const txEnd = dates.length > 0 ? Math.min(...dates) : Infinity;
-    return thresholdForPctDestroyed("China", usAtkPctDestroyed, effUsAtkStrikeDate, usAtkPreempt, csCn, txEnd);
-  }, [usAtkEnabled, usAtkPctMode, usAtkPctDestroyed, usAtkThreshold, usAtkStrikeDate, effUsAtkStrikeDate, usAtkPreempt, usAtkSCActive, cnSCFactor, cnSCStrikeDate, tsmcDestroyed, usStrikeCnFabs, cnAtkEnabled, cnAtkStrikeDate]);
+    return thresholdForPctDestroyed("China", usAtkPctDestroyed, effUsAtkStrikeDate, usAtkPreempt, csCn, txEnd, usAtkDenialYears);
+  }, [usAtkEnabled, usAtkPctMode, usAtkPctDestroyed, usAtkThreshold, usAtkStrikeDate, effUsAtkStrikeDate, usAtkPreempt, usAtkDenialYears, usAtkSCActive, cnSCFactor, cnSCStrikeDate, tsmcDestroyed, usStrikeCnFabs, cnAtkEnabled, cnAtkStrikeDate]);
   // SC extra fab targets
   // US (TSMC) target count: 8 today (2026) — leading-edge Taiwan fabs + Arizona ramp.
   // +1 every 2 years (matches CN scaling rate) as Fab 21 Arizona / AP7 / Kumamoto / new packaging come online.
@@ -2940,7 +2959,9 @@ export default function App() {
       return null;
     };
 
-    const computeStats = (country, natEnabled, natDate, effThreshold, effStrikeDate, scActive, countryDiffusion, diffusionRefFn, preempt) => {
+    const computeStats = (country, natEnabled, natDate, effThreshold, effStrikeDate, scActive, countryDiffusion, diffusionRefFn, preempt, denialYears) => {
+      const denialEnd = preempt && denialYears != null ? effStrikeDate + denialYears : effStrikeDate;
+      const denialEndPad = denialEnd + 0.05;
       // === BASELINE: uses original (unreduced) data ===
       const all = points.filter(pt=>pt.country===country);
 
@@ -2966,7 +2987,7 @@ export default function App() {
       const scSiteMap = {};
       allSC.forEach((pt,idx) => {
         const key = pt.chain >= 0 ? "c"+pt.chain : "s"+idx;
-        if(!scSiteMap[key]) scSiteMap[key] = { phases:[], maxGpus:0, maxExistingGpus:0, hasExisting:false, hasPlanned:false };
+        if(!scSiteMap[key]) scSiteMap[key] = { phases:[], maxGpus:0, maxExistingGpus:0, maxInDenialWindow:0, hasExisting:false, hasPlanned:false };
         scSiteMap[key].phases.push(pt);
         if(pt.gpus > scSiteMap[key].maxGpus) scSiteMap[key].maxGpus = pt.gpus;
         if(pt.year <= effStrikeDate+0.05) {
@@ -2975,14 +2996,19 @@ export default function App() {
         } else {
           scSiteMap[key].hasPlanned = true;
         }
+        if (pt.year <= denialEndPad && pt.gpus > scSiteMap[key].maxInDenialWindow) {
+          scSiteMap[key].maxInDenialWindow = pt.gpus;
+        }
       });
       const scSites = Object.values(scSiteMap);
 
-      // Hit detection uses SC-adjusted sizes
+      // Hit detection uses SC-adjusted sizes. Under preempt mode, "above threshold"
+      // is judged inside the denial window only — post-window builds are not
+      // suppressed and can drive the surviving training run.
       const disabledSites = scSites.filter(s => s.maxExistingGpus >= effThreshold);
-      const preemptedSites = preempt ? scSites.filter(s => s.maxGpus >= effThreshold && s.maxExistingGpus < effThreshold) : [];
+      const preemptedSites = preempt ? scSites.filter(s => s.maxInDenialWindow >= effThreshold && s.maxExistingGpus < effThreshold) : [];
       const survivingSites = preempt
-        ? scSites.filter(s => s.maxGpus < effThreshold)
+        ? scSites.filter(s => s.maxInDenialWindow < effThreshold)
         : scSites.filter(s => s.maxExistingGpus < effThreshold);
       const hasHits = disabledSites.length > 0 || preemptedSites.length > 0 || scActive;
 
@@ -3010,7 +3036,7 @@ export default function App() {
       // consumes the same bucket math that the scoreboard already uses.
       const survTimeline = analyticalSurvivingTimeline(
         country, effThreshold, effStrikeDate, preempt,
-        _analyticCsFor(country), _analyticTxEnd, NOW, 2041, 0.05);
+        _analyticCsFor(country), _analyticTxEnd, NOW, 2041, 0.05, denialYears);
       const allScTimeline = buildComputeTimeline(scSites, NOW, 2041, 0.05);
 
       // === Algo efficiency multipliers (saturating compute model) ===
@@ -3208,7 +3234,8 @@ export default function App() {
       // phase coming online between the strike and post-sabotage completion.
       // Planned clusters coming online AFTER completion don't affect the run, so
       // they're excluded from the count even if the physics treated them as preempted.
-      const preemptCutoff = isFinite(earliestDone) ? earliestDone : (isFinite(baselineDone) ? baselineDone : effStrikeDate + 5);
+      // Display the denial-window-bounded preempted count (same window the physics uses).
+      const preemptCutoff = preempt ? denialEnd : effStrikeDate;
       const preemptedEffectiveSites = preempt ? preemptedSites.filter(s =>
         s.phases.some(pt => pt.year <= preemptCutoff + 0.05)
       ) : [];
@@ -3364,11 +3391,11 @@ export default function App() {
     };
 
     // Compute US first so we can extract its actual company compute for CN diffusion
-    const usS = computeStats("US", usNatEnabled, usNatDate, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt);
+    const usS = computeStats("US", usNatEnabled, usNatDate, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt, cnAtkDenialYears);
     // CN's diffusion reference = what the US actually achieves (including nat + attack effects)
     const usActualCompanyFn = usS._attackCompanyFn;
-    const cnS = computeStats("China", cnNatEnabled, cnNatDate, effUsAtkThreshold, effUsAtkStrikeDateSC, usAtkSCActive, diffusion, usActualCompanyFn, usAtkPreempt);
-    const allyS = computeStats("Ally", false, 2050, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt);
+    const cnS = computeStats("China", cnNatEnabled, cnNatDate, effUsAtkThreshold, effUsAtkStrikeDateSC, usAtkSCActive, diffusion, usActualCompanyFn, usAtkPreempt, usAtkDenialYears);
+    const allyS = computeStats("Ally", false, 2050, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt, cnAtkDenialYears);
     const otherS = computeStats("Other", false, 2050, 1e11, NOW, false, 0, null, false);
     return { usS, cnS, allyS, otherS };
     // Manual-trigger model: heavy stats only recompute when runVersion changes
@@ -4532,6 +4559,7 @@ export default function App() {
                 effThreshold: effUsAtkThreshold,
                 sd: usAtkStrikeDate, setSd: setUsAtkStrikeDate,
                 preempt: usAtkPreempt, setPreempt: setUsAtkPreempt,
+                denialYears: usAtkDenialYears, setDenialYears: setUsAtkDenialYears,
                 nat: { label: "CN Nationalization", enabled: cnNatEnabled, setEnabled: setCnNatEnabled, date: cnNatDate, setDate: setCnNatDate, color: "#d97706" },
                 scToggles: [
                   { label: "Strikes on SMIC and CXMT", checked: usStrikeCnFabs, set: setUsStrikeCnFabs, extra: `(+${Math.round(4 + Math.max(0, usAtkStrikeDate - 2026) / 2)} fabs)`,
@@ -4554,6 +4582,7 @@ export default function App() {
                 effThreshold: effCnAtkThreshold,
                 sd: cnAtkStrikeDate, setSd: setCnAtkStrikeDate,
                 preempt: cnAtkPreempt, setPreempt: setCnAtkPreempt,
+                denialYears: cnAtkDenialYears, setDenialYears: setCnAtkDenialYears,
                 nat: { label: "US Nationalization", enabled: usNatEnabled, setEnabled: setUsNatEnabled, date: usNatDate, setDate: setUsNatDate, color: "#3b82f6" },
                 scToggles: [
                   { label: "Strikes on TSMC Taiwan and Arizona", checked: tsmcDestroyed, set: setTsmcDestroyed, extra: `(+${Math.round(8 + Math.max(0, cnAtkStrikeDate - 2026) / 2)} fabs)`,
@@ -4629,8 +4658,17 @@ export default function App() {
                     Continuous denial
                   </label>
                   <div style={{ fontSize:9, color:"#475569", fontFamily:"var(--f)", marginBottom:6, paddingLeft:16, lineHeight:1.3 }}>
-                    {atk.preempt ? "Planned clusters above threshold are also prevented from being built." : "Strike once only: existing clusters destroyed, but future builds proceed."}
+                    {atk.preempt ? `Above-threshold builds prevented for ${atk.denialYears < 1 ? `${Math.round(atk.denialYears*12)} months` : `${atk.denialYears} year${atk.denialYears===1?"":"s"}`} after strike, then normal building resumes.` : "Strike once only: existing clusters destroyed, but future builds proceed."}
                   </div>
+                  {atk.preempt && (
+                    <div style={{ display:"flex", gap:4, marginBottom:8, paddingLeft:16 }}>
+                      {[0.5, 1, 2, 5].map(y => (
+                        <Btn key={y} active={Math.abs(atk.denialYears - y) < 0.01} onClick={() => atk.setDenialYears(y)}>
+                          {y < 1 ? `${Math.round(y*12)}mo` : `${y}y`}
+                        </Btn>
+                      ))}
+                    </div>
+                  )}
                   <div style={{ marginTop:6 }}>
                     <div style={{ fontSize:10, letterSpacing:0.5, color:"#f97316", textTransform:"uppercase", fontFamily:"var(--f)", marginBottom:4 }}>Supply Chain Disruption</div>
                     {atk.scToggles.map(sc => (
@@ -4690,7 +4728,7 @@ export default function App() {
                   sub={s.bestCluster?`via ${s.bestCluster.name.replace(" [EST]","")} (${s.bestStrategy})`:"no path"}
                   warn={s.earliestDone>2030} good={s.earliestDone-NOW<=1.5}
                   highlight />
-                <MetricBox label="Attack-caused delay" value={s.attackDelay===Infinity||s.earliestDone>2050?">2050":fmtDur(s.attackDelay)}
+                <MetricBox label={activeMilestoneLabel ? `Attack-caused delay (${activeMilestoneLabel})` : "Attack-caused delay"} value={s.attackDelay===Infinity||s.earliestDone>2050?">2050":fmtDur(s.attackDelay)}
                   sub={s.frozenYears>0&&s.attackDelay<Infinity&&s.attackDelay>0?`${((s.attackDelay/s.frozenYears)*100).toFixed(0)}% of total wait`:"—"}
                   warn={s.attackDelay>2} good={s.attackDelay<0.5&&s.attackDelay!==Infinity}
                   highlight />
@@ -4725,7 +4763,7 @@ export default function App() {
             <TrainingTimeline usS={usS} cnS={MODEL_CHINA ? cnS : null} alpha={alpha}
               usStrikeDate={effCnAtkStrikeDate} cnStrikeDate={effUsAtkStrikeDate}
               usStrikeEnabled={cnAtkEnabled} cnStrikeEnabled={usAtkEnabled}
-              fmtDate={fmtDate} fmtDur={fmtDur} />
+              fmtDate={fmtDate} fmtDur={fmtDur} milestoneLabel={activeMilestoneLabel} />
           </div>
         )}
 
@@ -4783,6 +4821,7 @@ export default function App() {
             usAtkThreshold={effUsAtkThreshold} cnAtkThreshold={effCnAtkThreshold}
             usAtkStrikeDate={effUsAtkStrikeDate} cnAtkStrikeDate={effCnAtkStrikeDate}
             usAtkPreempt={usAtkPreempt} cnAtkPreempt={cnAtkPreempt}
+            usAtkDenialYears={usAtkDenialYears} cnAtkDenialYears={cnAtkDenialYears}
             trainingRuns={[
               { ...usS, country: "US", color: "#3b82f6" },
               { ...cnS, country: "China", color: "#d97706" },
