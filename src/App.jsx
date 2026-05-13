@@ -882,7 +882,7 @@ function simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares) 
 // transitioning shares + SC-blended budget). Real Epoch clusters contribute their
 // deterministic sizes; the bucket-distribution analytical formulas are applied to
 // the REMAINING gap (newCountry - existingNew), exactly matching what the sampler does.
-function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs, txEnd, preemptCutoff = Infinity) {
+function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs, txEnd, preemptCutoff = Infinity, analyticalOnly = false) {
   let destroyedCompute = 0, destroyedCount = 0;
   let preemptedCompute = 0, preemptedCount = 0;
   let totalCompute = 0, totalCount = 0;
@@ -892,14 +892,15 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
   const cutoff = strikeDate + 0.05;
 
   // === Real clusters: deterministic contribution, GROUPED INTO SITES BY CHAIN ===
-  // The sampler groups clusters by chain ID (matching scPoints/computeStats line 2329):
-  // multiple phases of the same physical site collapse into ONE site whose size is
-  // max(phase.gpus) for phases built before strike. Without this grouping, the
-  // analytic over-counts US sites by ~69 (since US has many multi-phase chains).
+  // analyticalOnly=true skips this entirely — real clusters' compute is
+  // implicitly absorbed into the per-year bucket distribution below, with
+  // no real-cluster subtraction. Removes the step discontinuities at each
+  // real cluster's exact gpus value that produce sawtooth in T(strikeDate)
+  // under the binary-search inversion.
   const preemptCutoffPad = preemptCutoff === Infinity ? Infinity : preemptCutoff + 0.05;
   const siteMap = new Map();
   let _siteIdx = 0;
-  for (const c of CLUSTERS) {
+  if (!analyticalOnly) for (const c of CLUSTERS) {
     if (c.country !== country) continue;
     // Mirror points-filter: clusters with gpus < 1000 or year < 2022 or year >= 2041
     // are filtered out before reaching scPoints/scSites.
@@ -984,12 +985,13 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
       newCountry = newGlobal * yearShare;
     }
 
-    // Per-bucket sim budgets: distribute newCountry × buildShares across
-    // buckets, then subtract each real cluster's incremental compute from
-    // the bucket it sits in (spilling overflow to the next-larger bucket).
+    // Per-bucket sim budgets. In analyticalOnly mode, skip real-cluster
+    // subtraction — all of newCountry is distributed via buildShares.
     const rawShares = getNewBuildShares(shapeYear);
     const buildShares = capBuildShares(rawShares, countryMax);
-    const simBucketBudgets = simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
+    const simBucketBudgets = analyticalOnly
+      ? buildShares.map(s => s * newCountry)
+      : simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
     const totalSimBudget = simBucketBudgets.reduce((s, v) => s + v, 0);
     if (totalSimBudget < 1000) continue;  // nothing left to allocate
 
@@ -1051,7 +1053,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, txEnd, denialYears) {
+function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, txEnd, denialYears, analyticalOnly = false) {
   if (pctTarget <= 0.01) return 1e11;        // ~0% destroyed: above max cluster
   if (pctTarget >= 99.99) return 1000;       // ~100% destroyed: below min cluster
   const targetFrac = pctTarget / 100;
@@ -1060,7 +1062,7 @@ function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, t
     const mid = (lo + hi) / 2;
     const T = Math.pow(10, mid);
     const cutoff = preempt && denialYears != null ? strikeDate + denialYears : Infinity;
-    const r = analyticalStrikeOutcome(country, T, strikeDate, preempt, cs, txEnd, cutoff);
+    const r = analyticalStrikeOutcome(country, T, strikeDate, preempt, cs, txEnd, cutoff, analyticalOnly);
     const frac = r.totalCompute > 0 ? r.destroyedCompute / r.totalCompute : 0;
     // Lower threshold catches more clusters → more destroyed. So if current frac
     // is BELOW target, we need a LOWER threshold (catch more) → move hi down.
@@ -1081,7 +1083,7 @@ function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, t
 // analytical destroyed-fraction-above-threshold.
 //
 // Returns a function totalAt(t) returning total surviving compute online at t.
-function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous, cs, txEnd, tMin, tMax, step, denialYears) {
+function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous, cs, txEnd, tMin, tMax, step, denialYears, analyticalOnly = false) {
   const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + 0.25 : Infinity;
   const scFloorYear = Math.floor(scEffStrike);
   const cut = strikeDate + 0.05;
@@ -1092,9 +1094,11 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
   const denialEndPad = denialEnd + 0.05;
 
   // === Real clusters: group into sites by chain, apply SC reduction, decide survival ===
+  // analyticalOnly=true skips this and the realEvents accumulation below;
+  // all compute is treated as living in the analytical bucket distribution.
   const realSiteMap = new Map();
   let _idx = 0;
-  for (const c of CLUSTERS) {
+  if (!analyticalOnly) for (const c of CLUSTERS) {
     if (c.country !== country) continue;
     if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
     let gpus = c.gpus;
@@ -1174,11 +1178,12 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
       newCountry = newGlobal * yearShare;
     }
 
-    // Per-bucket sim budgets after subtracting real-cluster compute from the
-    // bucket each cluster sits in (overflow spills to next-larger bucket).
+    // Per-bucket sim budgets. analyticalOnly skips real-cluster subtraction.
     const rawShares = getNewBuildShares(shapeYear);
     const buildShares = capBuildShares(rawShares, countryMax);
-    const simBucketBudgets = simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
+    const simBucketBudgets = analyticalOnly
+      ? buildShares.map(s => s * newCountry)
+      : simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
     const gap = simBucketBudgets.reduce((s, v) => s + v, 0);
     if (gap < 1000) continue;
 
@@ -3632,7 +3637,7 @@ export default function App() {
       if (s.cnAtkEnabled && isFinite(s.cnAtkStrikeDate)) dates.push(s.cnAtkStrikeDate);
       return dates.length > 0 ? Math.min(...dates) : Infinity;
     }
-    function effThresholdFor(defender, s, sc) {
+    function effThresholdFor(defender, s, sc, analyticalOnly = false) {
       const isUs = defender === 'US';
       const enabled = isUs ? s.cnAtkEnabled : s.usAtkEnabled;
       if (!enabled) return Infinity;
@@ -3644,7 +3649,7 @@ export default function App() {
       const fixed = isUs ? s.cnAtkThreshold : s.usAtkThreshold;
       const cs = csFor(defender, s, sc);
       const txEnd = txEndFor(s);
-      if (pctMode) return thresholdForPctDestroyed(defender, pct, sd, preempt, cs, txEnd, denialYears);
+      if (pctMode) return thresholdForPctDestroyed(defender, pct, sd, preempt, cs, txEnd, denialYears, analyticalOnly);
       return fixed;
     }
 
@@ -3667,6 +3672,7 @@ export default function App() {
       const include = new Set(config.include || []);
       const aifpPresetCfg = config.aifpPreset || aifpPreset;
       const aifpOverridesCfg = config.aifpOverrides || aifpOverrides || {};
+      const analyticalOnly = !!config.analyticalOnly;
       const wartimePostScale = (_totalGpus, _time) => _totalGpus * alloc.training;
       const ALLOC = { experimental: 0.50, internal: 0.05 };
 
@@ -3706,12 +3712,12 @@ export default function App() {
           const cd = countryData(def);
           const cs = csFor(def, s, sc);
           const effSd = effStrikeDateFor(def, s);
-          const T = (cs && effSd != null) ? effThresholdFor(def, s, sc) : Infinity;
+          const T = (cs && effSd != null) ? effThresholdFor(def, s, sc, analyticalOnly) : Infinity;
           const denialYears = def === 'US' ? s.cnAtkDenialYears : s.usAtkDenialYears;
           const txEnd = txEndFor(s);
           let tl;
           if (cs && effSd != null && isFinite(T)) {
-            const survT = analyticalSurvivingTimeline(def, T, effSd, def === 'US' ? s.cnAtkPreempt : s.usAtkPreempt, cs, txEnd, NOW, 2041, 0.05, denialYears);
+            const survT = analyticalSurvivingTimeline(def, T, effSd, def === 'US' ? s.cnAtkPreempt : s.usAtkPreempt, cs, txEnd, NOW, 2041, 0.05, denialYears, analyticalOnly);
             const attackFn = (t) => (t < effSd) ? cd.baselineCompanyFn(t) : survT(t) * cd.actualShare(t);
             tl = sampleTL(attackFn, effSd);
           } else {
