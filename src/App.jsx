@@ -2705,6 +2705,29 @@ export default function App() {
 
   const [customFlop, setCustomFlop] = useState(false);
 
+  // === Parameter sweep panel state ===
+  const [sweepOpen, setSweepOpen] = useState(false);
+  const [sweepConfigText, setSweepConfigText] = useState(`{
+  "defenders": ["US"],
+  "vary": {
+    "cnAtkStrikeDate": "monthly(2026.5, 2031.5)",
+    "cnAtkPctDestroyed": [50, 75, 90]
+  },
+  "hold": {
+    "usAtkEnabled": false,
+    "cnAtkPctMode": true,
+    "cnAtkPreempt": false,
+    "tsmcDestroyed": true,
+    "cnAtkEnabled": true
+  },
+  "measure": ["SAR"],
+  "include": ["target_count"],
+  "plot": { "metric": "delay", "unit": "months" }
+}`);
+  const [sweepStatus, setSweepStatus] = useState("");
+  const [sweepRunning, setSweepRunning] = useState(false);
+  const sweepProgressRef = useRef(null);
+
   // Label for the currently-selected capability milestone (e.g. "SAR"), used
   // to annotate the attack-caused delay so the reader knows which milestone
   // it refers to. Null when the FLOP threshold is set to a custom value not
@@ -3497,6 +3520,506 @@ export default function App() {
     return () => aborter.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useAifpBackend, runVersion]);
+
+  // === Sweep framework: general N-axis parameter sweep over the model.
+  // Builds attack scenarios in JS using the analytical helpers, batches them
+  // into one AIFP POST per chunk, then replicates the scoreboard's training-
+  // completion search per scenario. Reuse pattern:
+  //
+  //   await window.__sweep({
+  //     defenders: ['US', 'China'],
+  //     vary: {
+  //       cnAtkStrikeDate: window.__sweepRange.monthly(NOW, 2032),
+  //       cnAtkPctDestroyed: [50, 75, 90],
+  //     },
+  //     hold: { tsmcDestroyed: true, usAtkEnabled: false, cnAtkPreempt: false },
+  //     measure: ['AC', 'SAR', 'TED-AI', 'SIAR', 'ASI'],
+  //     include: ['target_count', 'sites_disabled', 'compute_destroyed_pct'],
+  //   });
+  //
+  // Recognised vary axes (any state knob from the attack panels, plus
+  // nationalization + training params + AIFP preset/overrides). Hold
+  // overrides apply only inside the sweep; the live UI state is unchanged.
+  useEffect(() => {
+    // ---------- Range helpers ----------
+    window.__sweepRange = {
+      monthly: (start, end) => {
+        const out = [];
+        let y = Math.round(start * 12) / 12;
+        while (y <= end + 1e-6) { out.push(Math.round(y * 10000) / 10000); y += 1/12; }
+        return out;
+      },
+      linspace: (start, end, n) => Array.from({length: n}, (_, i) => start + i * (end - start) / Math.max(1, n - 1)),
+      range: (start, end, step) => {
+        const out = []; for (let v = start; v <= end + 1e-9; v += step) out.push(v); return out;
+      },
+    };
+
+    // ---------- Generic helpers ----------
+    function mkInterp(xs, ys) {
+      return (t) => {
+        if (t <= xs[0]) return ys[0];
+        if (t >= xs[xs.length-1]) return ys[xs.length-1];
+        let lo = 0, hi = xs.length - 1;
+        while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (xs[mid] <= t) lo = mid; else hi = mid; }
+        const f = (t - xs[lo]) / (xs[hi] - xs[lo]);
+        return ys[lo] * (1 - f) + ys[hi] * f;
+      };
+    }
+    const tlInterp = (tl) => mkInterp(tl.map(pp => pp[0]), tl.map(pp => pp[1]));
+    function sampleTL(fn, refineAt) {
+      const out = [];
+      for (let y = 2024; y <= 2040.001; y += 1/12) out.push([y, Math.max(fn(y), 1)]);
+      if (refineAt && refineAt > 2024 && refineAt < 2040) {
+        out.push([refineAt - 1e-3, Math.max(fn(refineAt - 1e-3), 1)]);
+        out.push([refineAt, Math.max(fn(refineAt), 1)]);
+      }
+      out.sort((a, b) => a[0] - b[0]);
+      return out;
+    }
+
+    // ---------- Per-country baseline timelines (no strike) ----------
+    function sitesForCountry(country) {
+      const arr = ALL_CLUSTERS.filter(c => c.country === country && c.gpus >= 1000 && c.year >= 2022 && c.year < 2041);
+      const map = {};
+      arr.forEach((c, idx) => {
+        const key = c.chain >= 0 ? "c"+c.chain : "s"+idx;
+        if (!map[key]) map[key] = { phases: [] };
+        map[key].phases.push({ year: c.year, gpus: c.gpus });
+      });
+      return { sites: Object.values(map), phases: arr.map(c => ({ year: c.year, gpus: c.gpus })) };
+    }
+    const _countryCache = {};
+    function countryData(country) {
+      if (_countryCache[country]) return _countryCache[country];
+      const { sites, phases } = sitesForCountry(country);
+      const allT = buildComputeTimeline(sites, NOW, 2041, 0.05);
+      const actualShare = (t) => getCompanyShareOfNational(t);
+      const baselineCompanyFn = (t) => allT(t) * actualShare(t);
+      const baselineTL = sampleTL(baselineCompanyFn, null);
+      _countryCache[country] = { sites, phases, allT, actualShare, baselineCompanyFn, baselineTL };
+      return _countryCache[country];
+    }
+
+    // ---------- Per-sweep config helpers ----------
+    function deriveSC(s) {
+      const T = (s.tsmcDestroyed && s.cnAtkEnabled) ? 1 : 0;
+      const D = (s.usStrikeCnFabs && s.usAtkEnabled) ? 1 : 0;
+      const usSCFactor = (1 - 0.95 * T);
+      const cnSCFactor = 0.484 * (1 - 0.95 * D) + 0.516 * (1 - 0.95 * T);
+      return { T, D, usSCFactor, cnSCFactor, tsmcStrike: !!T, smicStrike: !!D };
+    }
+    function csFor(defender, s, sc) {
+      if (defender === 'US') {
+        if (sc.T === 0) return null; // no CN strike on US
+        return { strikeYear: s.cnAtkStrikeDate, scFactor: sc.usSCFactor, tsmcStrike: sc.tsmcStrike };
+      }
+      if (defender === 'China') {
+        if (sc.T === 0 && sc.D === 0) return null;
+        const cnSCStrikeDate = Math.min(sc.T ? s.cnAtkStrikeDate : Infinity, sc.D ? s.usAtkStrikeDate : Infinity);
+        return { strikeYear: cnSCStrikeDate, scFactor: sc.cnSCFactor, tsmcStrike: sc.tsmcStrike, smicStrike: sc.smicStrike };
+      }
+      return null;
+    }
+    function effStrikeDateFor(defender, s) {
+      if (defender === 'US') return s.cnAtkEnabled ? s.cnAtkStrikeDate : null;
+      if (defender === 'China') return s.usAtkEnabled ? s.usAtkStrikeDate : null;
+      return null;
+    }
+    function txEndFor(s) {
+      const dates = [];
+      if (s.usAtkEnabled && isFinite(s.usAtkStrikeDate)) dates.push(s.usAtkStrikeDate);
+      if (s.cnAtkEnabled && isFinite(s.cnAtkStrikeDate)) dates.push(s.cnAtkStrikeDate);
+      return dates.length > 0 ? Math.min(...dates) : Infinity;
+    }
+    function effThresholdFor(defender, s, sc) {
+      const isUs = defender === 'US';
+      const enabled = isUs ? s.cnAtkEnabled : s.usAtkEnabled;
+      if (!enabled) return Infinity;
+      const pctMode = isUs ? s.cnAtkPctMode : s.usAtkPctMode;
+      const sd = isUs ? s.cnAtkStrikeDate : s.usAtkStrikeDate;
+      const preempt = isUs ? s.cnAtkPreempt : s.usAtkPreempt;
+      const denialYears = isUs ? s.cnAtkDenialYears : s.usAtkDenialYears;
+      const pct = isUs ? s.cnAtkPctDestroyed : s.usAtkPctDestroyed;
+      const fixed = isUs ? s.cnAtkThreshold : s.usAtkThreshold;
+      const cs = csFor(defender, s, sc);
+      const txEnd = txEndFor(s);
+      if (pctMode) return thresholdForPctDestroyed(defender, pct, sd, preempt, cs, txEnd, denialYears);
+      return fixed;
+    }
+
+    // ---------- Snapshot current UI state for `hold` defaults ----------
+    function takeStateSnapshot() {
+      return {
+        cnAtkStrikeDate, cnAtkEnabled, cnAtkPreempt, cnAtkPctMode, cnAtkPctDestroyed, cnAtkThreshold, cnAtkDenialYears,
+        usAtkStrikeDate, usAtkEnabled, usAtkPreempt, usAtkPctMode, usAtkPctDestroyed, usAtkThreshold, usAtkDenialYears,
+        tsmcDestroyed, usStrikeCnFabs,
+        usNatEnabled, cnNatEnabled, usNatDate, cnNatDate,
+      };
+    }
+
+    // ---------- Main entry ----------
+    window.__sweep = async function(config) {
+      const defenders = config.defenders || ['US'];
+      const vary = config.vary || {};
+      const hold = config.hold || {};
+      const measure = config.measure || ['AC', 'SAR', 'TED-AI', 'SIAR', 'ASI'];
+      const include = new Set(config.include || []);
+      const aifpPresetCfg = config.aifpPreset || aifpPreset;
+      const aifpOverridesCfg = config.aifpOverrides || aifpOverrides || {};
+      const wartimePostScale = (_totalGpus, _time) => _totalGpus * alloc.training;
+      const ALLOC = { experimental: 0.50, internal: 0.05 };
+
+      // Per-milestone FLOP targets
+      const milestoneTargets = {};
+      for (const key of measure) {
+        const m = MILESTONES.find(mm => mm.key === key);
+        if (!m) continue;
+        const fEff = Math.pow(10, m.feb2025Log10 - FLOP_EPOCH_SHIFT);
+        milestoneTargets[key] = { pre: alpha * fEff, post: (1 - alpha) * fEff };
+      }
+
+      // Cartesian product of vary axes
+      const axisNames = Object.keys(vary);
+      let combos = [{}];
+      for (const name of axisNames) {
+        const vals = vary[name];
+        const next = [];
+        for (const c of combos) for (const v of vals) next.push({...c, [name]: v});
+        combos = next;
+      }
+      const baseState = { ...takeStateSnapshot(), ...hold };
+
+      // Build scenarios: one baseline per defender + one attack per (probe, defender)
+      const scenarios = [];
+      const baselineIdFor = (def) => `__baseline-${def}`;
+      for (const def of defenders) {
+        const cd = countryData(def);
+        scenarios.push({ id: baselineIdFor(def), compute_timeline: cd.baselineTL, initial_progress: 0, alloc: ALLOC });
+      }
+      const probeMeta = [];
+      for (let i = 0; i < combos.length; i++) {
+        const s = { ...baseState, ...combos[i] };
+        const sc = deriveSC(s);
+        const perDef = {};
+        for (const def of defenders) {
+          const cd = countryData(def);
+          const cs = csFor(def, s, sc);
+          const effSd = effStrikeDateFor(def, s);
+          const T = (cs && effSd != null) ? effThresholdFor(def, s, sc) : Infinity;
+          const denialYears = def === 'US' ? s.cnAtkDenialYears : s.usAtkDenialYears;
+          const txEnd = txEndFor(s);
+          let tl;
+          if (cs && effSd != null && isFinite(T)) {
+            const survT = analyticalSurvivingTimeline(def, T, effSd, def === 'US' ? s.cnAtkPreempt : s.usAtkPreempt, cs, txEnd, NOW, 2041, 0.05, denialYears);
+            const attackFn = (t) => (t < effSd) ? cd.baselineCompanyFn(t) : survT(t) * cd.actualShare(t);
+            tl = sampleTL(attackFn, effSd);
+          } else {
+            tl = cd.baselineTL;
+          }
+          const id = `__probe-${i}-${def}`;
+          scenarios.push({ id, compute_timeline: tl, initial_progress: 0, alloc: ALLOC });
+          perDef[def] = { id, cs, effSd, threshold: T, txEnd };
+        }
+        probeMeta.push({ idx: i, axes: combos[i], state: s, sc, perDef });
+      }
+
+      // POST in chunks (always include all baselines as calibration anchors)
+      window.__sweepProgress = { phase: 'posting', done: 0, total: scenarios.length };
+      const respMap = {};
+      const baselineCount = defenders.length;
+      const CHUNK = 24;
+      for (let i = baselineCount; i < scenarios.length; i += CHUNK) {
+        const chunk = [...scenarios.slice(0, baselineCount), ...scenarios.slice(i, Math.min(i + CHUNK, scenarios.length))];
+        const body = { preset: aifpPresetCfg, overrides: aifpOverridesCfg, scenarios: chunk, time_range: [2017, 2040], initial_progress: 0 };
+        const resp = await fetch(AIFP_BACKEND_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const json = await resp.json();
+        for (const [id, r] of Object.entries(json.scenarios || {})) respMap[id] = r;
+        window.__sweepProgress.done = Math.min(i + CHUNK, scenarios.length);
+      }
+
+      // Milestone-completion helper.
+      // Uses an ANALYTICAL EXPECTED max surviving cluster size (smooth in
+      // threshold) rather than iterating discrete real clusters. This is the
+      // option-(b) treatment: everything is expected-value so the curves are
+      // smooth in strike date instead of step-changing whenever the threshold
+      // crosses an individual real cluster's size.
+      //   Attack: largest surviving cluster ≈ threshold (a sim cluster sits
+      //     just below T in the bucket containing T). Available from the year
+      //     the frontier first reaches T.
+      //   Baseline (no strike): effGpus is left ~unbounded; pre-training is
+      //     capped to the training budget via preScale anyway.
+      function frontierAvailYear(targetGpus) {
+        for (let y = Math.floor(NOW); y <= 2040; y++) {
+          if (getMaxCluster(y) >= targetGpus) return Math.max(NOW, y);
+        }
+        return 2040;
+      }
+      function milestoneFor(scenarioId, _country, threshold) {
+        const r = respMap[scenarioId];
+        if (!r || !r.time || !r.algo_multiplier) return null;
+        const algoAt = mkInterp(r.time, r.algo_multiplier);
+        const sc = scenarios.find(x => x.id === scenarioId);
+        if (!sc) return null;
+        const tlAt = tlInterp(sc.compute_timeline);
+        const isAttack = isFinite(threshold);
+        const effGpus = isAttack ? Math.max(1000, threshold) : 1e12;
+        const availYear = isAttack ? frontierAvailYear(effGpus) : NOW;
+        const out = {};
+        for (const key of measure) {
+          const t = milestoneTargets[key];
+          if (!t) { out[key] = null; continue; }
+          const res = bestCompletionV2(effGpus, availYear, tlAt, t.pre, t.post, algoAt, p, eta, u, NOW, wartimePostScale, wartimePostScale);
+          out[key] = isFinite(res.done) ? res.done : null;
+        }
+        return out;
+      }
+
+      // Compute baseline milestones per defender
+      const baseline = {};
+      for (const def of defenders) {
+        baseline[def] = milestoneFor(baselineIdFor(def), def, Infinity);
+      }
+
+      // Compute per-probe milestones + extras
+      const probes = probeMeta.map(p => {
+        const stats = {};
+        for (const def of defenders) {
+          const meta = p.perDef[def];
+          const ms = milestoneFor(meta.id, def, meta.threshold);
+          const bl = baseline[def];
+          const delays = {};
+          for (const key of measure) {
+            // An attack can't make completion faster than the no-attack baseline
+            if (ms && bl && ms[key] != null && bl[key] != null && ms[key] < bl[key]) ms[key] = bl[key];
+            delays['delay_' + key] = (ms && bl && ms[key] != null && bl[key] != null) ? ms[key] - bl[key] : null;
+          }
+          const out = { ...ms, ...delays, threshold: meta.threshold };
+          if (include.has('target_count') || include.has('sites_disabled') || include.has('sites_preempted') || include.has('compute_destroyed_pct') || include.has('compute_destroyed_h100e')) {
+            if (meta.cs && isFinite(meta.threshold)) {
+              const a = analyticalStrikeOutcome(def, meta.threshold, meta.effSd,
+                def === 'US' ? p.state.cnAtkPreempt : p.state.usAtkPreempt,
+                meta.cs, meta.txEnd,
+                meta.cs ? meta.effSd + (def === 'US' ? p.state.cnAtkDenialYears : p.state.usAtkDenialYears) : Infinity);
+              if (include.has('target_count')) out.target_count = Math.round(a.destroyedCount + a.preemptedCount);
+              if (include.has('sites_disabled')) out.sites_disabled = Math.round(a.destroyedCount);
+              if (include.has('sites_preempted')) out.sites_preempted = Math.round(a.preemptedCount);
+              if (include.has('compute_destroyed_h100e')) out.compute_destroyed_h100e = Math.round(a.destroyedCompute);
+              if (include.has('compute_destroyed_pct')) out.compute_destroyed_pct = a.totalCompute > 0 ? Math.round(a.destroyedCompute / a.totalCompute * 100) : 0;
+            }
+          }
+          stats[def] = out;
+        }
+        return { axes: p.axes, stats };
+      });
+
+      const result = { config: { defenders, vary, hold, measure, include: [...include], aifpPreset: aifpPresetCfg, aifpOverrides: aifpOverridesCfg }, baseline, probes };
+      window.__sweepResult = result;
+      window.__sweepProgress = { phase: 'done', done: scenarios.length, total: scenarios.length };
+      return result;
+    };
+
+    // ---------- Plotter ----------
+    // window.__plotSweep(result, opts) — render a line plot of a sweep result
+    // in a new popup window. Mirrors plot_sweep.py's line-plot behavior.
+    //
+    //   __plotSweep(window.__sweepResult);
+    //   __plotSweep(r, { measure: 'ASI', metric: 'target_count' });
+    //
+    // opts:
+    //   measure: 'SAR' (default: first in result.config.measure)
+    //   defender: 'US' (default: all defenders in result)
+    //   metric: 'delay' | 'absolute' | 'target_count' | 'sites_disabled' |
+    //           'sites_preempted' | 'compute_destroyed_pct' |
+    //           'compute_destroyed_h100e' | 'threshold' (default: 'delay')
+    //   unit: 'months' | 'years' (default: 'months') — for delay only
+    //   x: vary-axis name (default: longest)
+    //   title: chart title
+    //
+    // Future enhancements tracked in PLOTTER_TODO.md in the project dir.
+    function __plotSweep(result, opts) {
+      opts = opts || {};
+      const cfg = result.config || {};
+      const probes = result.probes || [];
+      if (!probes.length) { alert('no probes'); return; }
+      const defenders = opts.defender ? [opts.defender] : (cfg.defenders || ['US']);
+      const measures = opts.measure ? [opts.measure] : (cfg.measure || ['SAR']);
+      const metric = opts.metric || 'delay';
+      const unit = opts.unit || 'months';
+      const axisNames = Object.keys(cfg.vary || {});
+      if (!axisNames.length) { alert('sweep had no vary axes'); return; }
+      const axisValues = {};
+      for (const n of axisNames) axisValues[n] = cfg.vary[n].slice();
+      const xAxis = (opts.x && axisValues[opts.x]) ? opts.x : axisNames.reduce((a, b) => axisValues[a].length >= axisValues[b].length ? a : b);
+      const seriesAxes = axisNames.filter(n => n !== xAxis);
+      const xIsDate = axisValues[xAxis].every(v => typeof v === 'number' && v > 2020 && v < 2050);
+      const perDefPerMs = metric === 'delay' || metric === 'absolute';
+
+      function getY(probe, def, ms) {
+        const s = (probe.stats || {})[def] || {};
+        if (metric === 'delay') {
+          const v = s['delay_' + ms];
+          return v == null ? null : (unit === 'months' ? v * 12 : v);
+        }
+        if (metric === 'absolute') return s[ms] ?? null;
+        return s[metric] ?? null;
+      }
+      const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      function fmtDateYear(yr) {
+        const y = Math.floor(yr); const mo = Math.round((yr - y) * 12);
+        return MONTHS[mo % 12] + ' ' + y;
+      }
+      function fmtSeries(name, value) {
+        if (typeof value === 'boolean') return name + '=' + (value ? 'on' : 'off');
+        if (typeof value === 'number') {
+          if (name.endsWith('StrikeDate') && value > 2020 && value < 2050) return fmtDateYear(value);
+          if (name.endsWith('Threshold') && value >= 1000) return name + '=' + (value/1000).toFixed(0) + 'K';
+          return name + '=' + value;
+        }
+        return name + '=' + value;
+      }
+
+      // Build series combos
+      let combos = [{}];
+      for (const n of seriesAxes) {
+        const next = [];
+        for (const c of combos) for (const v of axisValues[n]) next.push({...c, [n]: v});
+        combos = next;
+      }
+
+      // Collect all series (label, xs, ys)
+      const series = [];
+      for (const def of defenders) {
+        const msList = perDefPerMs ? measures : [null];
+        for (const ms of msList) {
+          for (const combo of combos) {
+            const pts = [];
+            for (const p of probes) {
+              let match = true;
+              for (const k in combo) if (p.axes[k] !== combo[k]) { match = false; break; }
+              if (!match) continue;
+              const x = p.axes[xAxis];
+              const y = getY(p, def, ms);
+              if (x != null) pts.push([x, y]);
+            }
+            pts.sort((a, b) => a[0] - b[0]);
+            const labelParts = [];
+            if (defenders.length > 1) labelParts.push(def);
+            if (ms && msList.length > 1) labelParts.push(ms);
+            for (const k in combo) labelParts.push(fmtSeries(k, combo[k]));
+            const label = labelParts.join(' · ') || (defenders.length === 1 ? def : '');
+            series.push({ label, pts });
+          }
+        }
+      }
+
+      // Determine bounds
+      const allX = []; const allY = [];
+      for (const s of series) for (const [x, y] of s.pts) { allX.push(x); if (y != null && isFinite(y)) allY.push(y); }
+      const xMin = Math.min(...allX), xMax = Math.max(...allX);
+      const yMin = Math.min(0, ...allY), yMax = Math.max(...allY);
+      const yPad = (yMax - yMin) * 0.05;
+
+      // Render SVG
+      const W = 1100, H = 600;
+      const M = { l: 70, r: 240, t: 50, b: 70 };
+      const pw = W - M.l - M.r, ph = H - M.t - M.b;
+      const xS = v => M.l + (v - xMin) / (xMax - xMin || 1) * pw;
+      const yS = v => M.t + ph - (v - yMin) / ((yMax + yPad) - yMin || 1) * ph;
+
+      const colors = ['#3b82f6','#f59e0b','#ef4444','#10b981','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1','#14b8a6','#a855f7'];
+
+      const svg = [];
+      svg.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="background:white;font-family:system-ui,sans-serif">`);
+      // title
+      const title = opts.title || (metric + ' vs ' + xAxis);
+      svg.push(`<text x="${W/2}" y="22" text-anchor="middle" font-size="14" font-weight="600">${title}</text>`);
+      // axes
+      svg.push(`<line x1="${M.l}" y1="${M.t+ph}" x2="${M.l+pw}" y2="${M.t+ph}" stroke="#222"/>`);
+      svg.push(`<line x1="${M.l}" y1="${M.t}" x2="${M.l}" y2="${M.t+ph}" stroke="#222"/>`);
+      // y ticks
+      const yTickN = 8;
+      for (let i = 0; i <= yTickN; i++) {
+        const v = yMin + (yMax + yPad - yMin) * i / yTickN;
+        const yp = yS(v);
+        svg.push(`<line x1="${M.l}" y1="${yp}" x2="${M.l+pw}" y2="${yp}" stroke="#eee"/>`);
+        svg.push(`<text x="${M.l-6}" y="${yp+4}" text-anchor="end" font-size="10">${v.toFixed(1)}</text>`);
+      }
+      // x ticks
+      const xTickN = Math.min(12, Math.max(4, axisValues[xAxis].length));
+      for (let i = 0; i <= xTickN; i++) {
+        const v = xMin + (xMax - xMin) * i / xTickN;
+        const xp = xS(v);
+        svg.push(`<line x1="${xp}" y1="${M.t+ph}" x2="${xp}" y2="${M.t+ph+5}" stroke="#222"/>`);
+        const label = xIsDate ? fmtDateYear(v) : v.toFixed(2);
+        svg.push(`<text x="${xp}" y="${M.t+ph+18}" text-anchor="middle" font-size="10">${label}</text>`);
+      }
+      // x-axis label
+      svg.push(`<text x="${M.l+pw/2}" y="${H-12}" text-anchor="middle" font-size="11">${xAxis}</text>`);
+      // y-axis label
+      const yLabel = metric === 'delay' ? `Delay (${unit})` : metric === 'absolute' ? 'Milestone year' : metric;
+      svg.push(`<text x="20" y="${M.t+ph/2}" text-anchor="middle" font-size="11" transform="rotate(-90 20 ${M.t+ph/2})">${yLabel}</text>`);
+      // series lines
+      series.forEach((s, i) => {
+        const color = colors[i % colors.length];
+        const pts = s.pts.filter(p => p[1] != null && isFinite(p[1]));
+        if (!pts.length) return;
+        const path = pts.map((p, j) => (j === 0 ? 'M' : 'L') + xS(p[0]).toFixed(1) + ',' + yS(p[1]).toFixed(1)).join(' ');
+        svg.push(`<path d="${path}" fill="none" stroke="${color}" stroke-width="1.6"/>`);
+        for (const p of pts) svg.push(`<circle cx="${xS(p[0]).toFixed(1)}" cy="${yS(p[1]).toFixed(1)}" r="2.5" fill="${color}"/>`);
+      });
+      // legend
+      const lgX = M.l + pw + 16, lgY = M.t;
+      svg.push(`<rect x="${lgX-4}" y="${lgY-8}" width="${M.r-24}" height="${Math.min(series.length, 20)*18+12}" fill="white" stroke="#ddd"/>`);
+      series.slice(0, 20).forEach((s, i) => {
+        const color = colors[i % colors.length];
+        const ly = lgY + i * 18 + 4;
+        svg.push(`<line x1="${lgX}" y1="${ly}" x2="${lgX+18}" y2="${ly}" stroke="${color}" stroke-width="2"/>`);
+        svg.push(`<circle cx="${lgX+9}" cy="${ly}" r="2.5" fill="${color}"/>`);
+        const esc = (s.label || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+        svg.push(`<text x="${lgX+24}" y="${ly+4}" font-size="10">${esc}</text>`);
+      });
+      svg.push(`</svg>`);
+
+      // Open popup
+      const html = `<!doctype html><html><head><title>${title}</title><style>body{margin:8px;background:#f8fafc}</style></head><body>${svg.join('')}<div style="margin-top:8px;font:11px system-ui,sans-serif;color:#64748b">Right-click the chart → "Save image as…" to export as SVG/PNG.</div></body></html>`;
+      const w = window.open('', '_blank', 'width=' + (W+40) + ',height=' + (H+80));
+      if (!w) { alert('popup blocked'); return; }
+      w.document.write(html);
+      w.document.close();
+    }
+    window.__plotSweep = __plotSweep;
+    // Convenience: run sweep + plot in one call
+    window.__sweepAndPlot = async function(config, plotOpts) {
+      const r = await window.__sweep(config);
+      __plotSweep(r, plotOpts);
+      return r;
+    };
+
+    // Backwards-compat wrapper for the old narrow API used by sweep_us_sar_delay.csv etc.
+    window.__sweepUsSar = async function(pctList, sdList) {
+      const r = await window.__sweep({
+        defenders: ['US'],
+        vary: { cnAtkPctDestroyed: pctList, cnAtkStrikeDate: sdList },
+        hold: { usAtkEnabled: false, cnAtkPctMode: true, cnAtkPreempt: false, tsmcDestroyed: true },
+        measure: ['SAR'],
+      });
+      return {
+        baseline_sar: r.baseline.US?.SAR,
+        results: r.probes.map(p => ({
+          pct: p.axes.cnAtkPctDestroyed,
+          sd: p.axes.cnAtkStrikeDate,
+          threshold: Math.round(p.stats.US.threshold),
+          post_sar: p.stats.US.SAR,
+          delay_yrs: p.stats.US.delay_SAR,
+        })),
+      };
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alpha, p, eta, u, alloc, aifpPreset, aifpOverrides,
+      cnAtkStrikeDate, cnAtkEnabled, cnAtkPreempt, cnAtkPctMode, cnAtkPctDestroyed, cnAtkThreshold, cnAtkDenialYears,
+      usAtkStrikeDate, usAtkEnabled, usAtkPreempt, usAtkPctMode, usAtkPctDestroyed, usAtkThreshold, usAtkDenialYears,
+      tsmcDestroyed, usStrikeCnFabs, usNatEnabled, cnNatEnabled, usNatDate, cnNatDate]);
 
   // === Projection data from AIFP ===
   const projections = useMemo(() => {
@@ -4546,6 +5069,87 @@ export default function App() {
                 {`US baseline: ${rate.toFixed(2)} OOM/yr present-day (\u03B5=0.34, saturating at 1000\u00D7)`}
               </div>}
             </div>
+          </div>
+
+          {/* Parameter sweep panel — runs window.__sweep + opens window.__plotSweep */}
+          <div style={{ marginBottom:16, background:"rgba(15,23,42,0.5)", border:"1px solid #1e293b", borderRadius:8, padding:"10px 14px" }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }} onClick={() => setSweepOpen(o => !o)}>
+              <div style={{ fontSize:13, fontWeight:600, color:"#94a3b8", fontFamily:"var(--f)" }}>
+                {sweepOpen ? "▼" : "▶"} Parameter sweep
+              </div>
+              {sweepStatus && <div style={{ fontSize:11, color:"#94a3b8", fontFamily:"var(--f)" }}>{sweepStatus}</div>}
+            </div>
+            {sweepOpen && (
+              <div style={{ marginTop:10 }}>
+                <div style={{ fontSize:10, color:"#64748b", fontFamily:"var(--f)", marginBottom:6, lineHeight:1.4 }}>
+                  Edit the config JSON below, then click <b>Run + Plot</b>. Strings like <code>monthly(2026.5, 2031.5)</code>, <code>linspace(0, 100, 11)</code>, or <code>range(0, 5, 0.25)</code> expand to arrays via <code>window.__sweepRange</code>. Recognised vary axes: any <code>cnAtk*</code> / <code>usAtk*</code> state knob, <code>tsmcDestroyed</code>, <code>usStrikeCnFabs</code>, nationalization toggles/dates. See <code>SWEEP_USAGE.md</code>.
+                </div>
+                <textarea
+                  value={sweepConfigText}
+                  onChange={e => setSweepConfigText(e.target.value)}
+                  spellCheck={false}
+                  style={{ width:"100%", minHeight:240, fontFamily:"ui-monospace,Consolas,monospace", fontSize:11, padding:8, background:"#0b1220", color:"#cbd5e1", border:"1px solid #1e293b", borderRadius:4, lineHeight:1.4 }}
+                />
+                <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:8 }}>
+                  <button
+                    disabled={sweepRunning}
+                    onClick={async () => {
+                      let parsed;
+                      try { parsed = JSON.parse(sweepConfigText); } catch (e) { setSweepStatus("parse error: " + e.message); return; }
+                      // Expand string range expressions
+                      const expand = (val) => {
+                        if (typeof val !== 'string') return val;
+                        const m = val.match(/^(monthly|linspace|range)\(([-\d.,\s]+)\)$/);
+                        if (!m || !window.__sweepRange?.[m[1]]) return val;
+                        const args = m[2].split(',').map(s => parseFloat(s.trim()));
+                        return window.__sweepRange[m[1]](...args);
+                      };
+                      if (parsed.vary) for (const k of Object.keys(parsed.vary)) parsed.vary[k] = expand(parsed.vary[k]);
+                      const plotOpts = parsed.plot;
+                      delete parsed.plot;
+                      setSweepRunning(true);
+                      setSweepStatus("starting…");
+                      const t0 = Date.now();
+                      const poll = setInterval(() => {
+                        const pg = window.__sweepProgress;
+                        if (pg) setSweepStatus(`${pg.phase} ${pg.done}/${pg.total}`);
+                      }, 500);
+                      sweepProgressRef.current = poll;
+                      try {
+                        const r = await window.__sweep(parsed);
+                        clearInterval(poll);
+                        const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+                        setSweepStatus(`done — ${r.probes.length} probes in ${elapsedSec}s`);
+                        window.__plotSweep(r, plotOpts || {});
+                      } catch (e) {
+                        clearInterval(poll);
+                        setSweepStatus("error: " + (e.message || e));
+                      } finally {
+                        setSweepRunning(false);
+                      }
+                    }}
+                    style={{ background: sweepRunning ? "#475569" : "#3b82f6", color:"#f8fafc", border:"none", padding:"8px 16px", borderRadius:4, fontWeight:600, cursor: sweepRunning ? "wait" : "pointer", fontSize:12, fontFamily:"var(--f)" }}
+                  >{sweepRunning ? "Running…" : "▶ Run sweep + plot"}</button>
+                  <button
+                    disabled={!window.__sweepResult}
+                    onClick={() => {
+                      if (!window.__sweepResult) return;
+                      const blob = new Blob([JSON.stringify(window.__sweepResult)], { type: 'application/json' });
+                      const a = document.createElement('a');
+                      a.href = URL.createObjectURL(blob);
+                      a.download = 'sweep_' + Date.now() + '.json';
+                      document.body.appendChild(a); a.click();
+                    }}
+                    style={{ background:"#334155", color:"#cbd5e1", border:"1px solid #475569", padding:"8px 12px", borderRadius:4, fontSize:11, fontFamily:"var(--f)", cursor:"pointer" }}
+                  >Download JSON</button>
+                  <button
+                    disabled={!window.__sweepResult}
+                    onClick={() => { if (window.__sweepResult) window.__plotSweep(window.__sweepResult, {}); }}
+                    style={{ background:"#334155", color:"#cbd5e1", border:"1px solid #475569", padding:"8px 12px", borderRadius:4, fontSize:11, fontFamily:"var(--f)", cursor:"pointer" }}
+                  >Re-plot last</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Attack panels (China-strikes-US only when MODEL_CHINA=false) */}
