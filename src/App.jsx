@@ -674,6 +674,11 @@ const SIM_COUNTRY_SHARES = SHARES_NOW;
 // China: baseline_frac = 0.484 (SMIC, permanent if not struck), recovery_frac = 0.516
 //        (TSMC-dependent half — smuggling + offshore remote access — tracks rebuilt capacity)
 const RECOVERY_YEARS = 7;
+// Pipeline delay: chips already in flight still get delivered (~3 months).
+const SC_PIPELINE_DELAY = 0.25;
+// Phase-in window: how long after pipeline-delay end the SC effect ramps from
+// 1.0 (no effect) down to `baseline`. Set to 0 to recover instant-SC behavior.
+const SC_PHASE_IN_YEARS = 0.25;
 
 function getPostStrikeShares(country, cs) {
   // Each struck component leaves a 5% residual (damaged-but-operating fabs,
@@ -709,15 +714,62 @@ function getPostStrikeShares(country, cs) {
 const RECOVERY_GAIN = 0.05;
 function getPostStrikeFraction(country, year, cs /*, baseNewGlobal, baselineAtStrike */) {
   if (!cs || cs.strikeYear == null) return 1.0;
-  const effStrike = cs.strikeYear + 0.25;
+  const effStrike = cs.strikeYear + SC_PIPELINE_DELAY;
   if (year < effStrike) return 1.0;
-  if (!cs.tsmcStrike) {
-    return cs.scFactor != null ? cs.scFactor : 1.0;
-  }
+  // Determine the post-strike "baseline" (the immediate post-phase-in floor):
+  //   - TSMC strike: uses getPostStrikeShares.baseline (5% for full SC strike).
+  //   - Non-TSMC (e.g. SMIC-only on China): uses cs.scFactor (e.g. 0.54 — China
+  //     loses 46% from SMIC but retains TSMC imports). The phase-in and
+  //     recovery curve apply to ALL strikes uniformly so the post-strike
+  //     dynamics are consistent across strike types.
+  const baseline = cs.tsmcStrike
+    ? getPostStrikeShares(country, cs).baseline
+    : (cs.scFactor != null ? cs.scFactor : 1.0);
   const yrsSince = year - effStrike;
-  const ramp = Math.min(yrsSince / RECOVERY_YEARS, 1);
-  const { baseline } = getPostStrikeShares(country, cs);
+  if (yrsSince < SC_PHASE_IN_YEARS) {
+    const f = SC_PHASE_IN_YEARS > 0 ? yrsSince / SC_PHASE_IN_YEARS : 1.0;
+    return 1.0 + f * (baseline - 1.0);
+  }
+  const recoverYrs = yrsSince - SC_PHASE_IN_YEARS;
+  const ramp = Math.min(recoverYrs / RECOVERY_YEARS, 1);
   return baseline + RECOVERY_GAIN * ramp;
+}
+
+// Time-average of the SC factor over an interval [a, b] (both expressed in
+// yrsSince the effective strike date). Used by the bucket loop to integrate
+// the gradual SC ramp over the post-strike portion of each AIFP year, instead
+// of evaluating it at a single point. Without this, a 3-month phase-in
+// evaluated at evalYear=scEffStrike returns 1.0 (no SC) for the year that
+// contains the strike — under-counting the SC effect.
+function avgPostStrikeFactor(country, cs, a, b) {
+  if (b <= a) return 1.0;
+  if (!cs || cs.strikeYear == null) return 1.0;
+  // Use TSMC baseline (5%) when TSMC is struck; otherwise use cs.scFactor (the
+  // partial-disruption fraction, e.g. 0.54 for SMIC-only on China). Phase-in
+  // and recovery curve apply uniformly in either case.
+  const baseline = cs.tsmcStrike
+    ? getPostStrikeShares(country, cs).baseline
+    : (cs.scFactor != null ? cs.scFactor : 1.0);
+  const PI = SC_PHASE_IN_YEARS;
+  const RE_END = PI + RECOVERY_YEARS;
+  let integral = 0;
+  // Phase-in segment [0, PI]: f(t) = 1 - (t/PI) * (1-baseline)
+  const pa = Math.max(0, a), pb = Math.min(PI, b);
+  if (pa < pb && PI > 0) {
+    integral += (pb - pa) - (1 - baseline) / (2 * PI) * (pb*pb - pa*pa);
+  } else if (pa < pb && PI === 0) {
+    integral += baseline * (pb - pa);  // collapse to instant baseline
+  }
+  // Recovery segment [PI, RE_END]: f(t) = baseline + ((t-PI)/RECOVERY_YEARS) * RECOVERY_GAIN
+  const ra = Math.max(PI, a), rb = Math.min(RE_END, b);
+  if (ra < rb) {
+    const ua = ra - PI, ub = rb - PI;
+    integral += baseline * (rb - ra) + RECOVERY_GAIN / (2 * RECOVERY_YEARS) * (ub*ub - ua*ua);
+  }
+  // Saturated segment [RE_END, ∞): f = baseline + RECOVERY_GAIN
+  const sa = Math.max(RE_END, a), sb = b;
+  if (sa < sb) integral += (baseline + RECOVERY_GAIN) * (sb - sa);
+  return integral / (b - a);
 }
 
 // Backward-compat wrapper for callers that pass year-since-strike directly without
@@ -867,7 +919,7 @@ function simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares) 
 // Compute strike outcome metrics analytically over the bucket distribution.
 //   country     - "US" | "China" | "Ally" | "Other"
 //   threshold   - strike threshold in H100-eq
-//   strikeDate  - effective hit-detection date (no +0.25 pipeline delay)
+//   strikeDate  - effective hit-detection date (no SC_PIPELINE_DELAY)
 //   continuous  - true if continuous denial is on (preempt post-strike clusters)
 //   cs          - supply-chain config { strikeYear, scFactor, tsmcStrike, smicStrike } or null
 //   txEnd       - shares transition end year (Infinity if disabled)
@@ -887,7 +939,7 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
   let preemptedCompute = 0, preemptedCount = 0;
   let totalCompute = 0, totalCount = 0;
 
-  const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + 0.25 : Infinity;
+  const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + SC_PIPELINE_DELAY : Infinity;
   const scFloorYear = Math.floor(scEffStrike);
   const cutoff = strikeDate + 0.05;
 
@@ -956,33 +1008,38 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
     const shapeYear = laggedYear(country, year);
     const baseGlobalMax = getMaxCluster(shapeYear);
 
-    // Match scPoints' hybrid: pre-SC-floor years use original generation params,
-    // strike year + later use SC-adjusted generation params.
-    let newCountry, countryMax;
-    if (year < scFloorYear || !cs || cs.strikeYear == null) {
-      const yearShare = SHARES_NOW[country] || 0;
-      newCountry = baseNewGlobal * yearShare;
-      countryMax = Math.round(baseGlobalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
-    } else {
+    // Unified per-year compute attribution. Mirrors generateSimulatedClusters
+    // line 1290+ exactly: always interpolate yearShares from SHARES_NOW (at t0)
+    // toward SHARES_AT_STRIKE (by strike date), and only apply the SC reduction
+    // to the post-strike fraction of the year. The earlier `year < scFloorYear`
+    // shortcut bypassed the interpolation in favour of flat SHARES_NOW, which
+    // produced a discrete yearShare jump every time Math.floor(scEffStrike)
+    // crossed an integer at strikeDate = year + 0.75 — the dominant recurring
+    // source of the delay-vs-strike-date sawtooth.
+    let newGlobal = baseNewGlobal;
+    let isPost = false;
+    if (cs && cs.strikeYear != null) {
       const preFrac = Math.max(0, Math.min(1, scEffStrike - year));
-      let newGlobal = baseNewGlobal;
-      let isPost = false;
       if (preFrac < 1) {
-        const evalYear = Math.max(year, scEffStrike);
-        const baselineAtStrike = getStrikeYearBaseline(cs.strikeYear) || baseNewGlobal;
-        const psFactor = getPostStrikeFraction(country, evalYear, cs, baseNewGlobal, baselineAtStrike);
+        // Average SC factor over the post-strike portion of year Y, expressed
+        // as yrsSince scEffStrike. With SC_PHASE_IN_YEARS=0 this matches the
+        // single-point baseline evaluation; with PHASE_IN > 0 it correctly
+        // integrates the gradual ramp.
+        const psStart = Math.max(year - scEffStrike, 0);
+        const psEnd = (year + 1) - scEffStrike;
+        const psFactor = avgPostStrikeFactor(country, cs, psStart, psEnd);
         newGlobal = preFrac * baseNewGlobal + (1 - preFrac) * psFactor * baseNewGlobal;
         isPost = true;
       }
-      const effScF = baseNewGlobal > 0 ? newGlobal / baseNewGlobal : 1.0;
-      const globalMax = isPost
-        ? Math.round(baseGlobalMax * Math.max(effScF, 0.15))
-        : baseGlobalMax;
-      countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
-      const yearShares = getCountryShares(year, txEnd);
-      const yearShare = yearShares[country] || 0;
-      newCountry = newGlobal * yearShare;
     }
+    const effScF = baseNewGlobal > 0 ? newGlobal / baseNewGlobal : 1.0;
+    const globalMax = isPost
+      ? Math.round(baseGlobalMax * Math.max(effScF, 0.15))
+      : baseGlobalMax;
+    const countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+    const txEndForShares = (cs && cs.strikeYear != null) ? txEnd : Infinity;
+    const yearShares = getCountryShares(year, txEndForShares);
+    const newCountry = newGlobal * (yearShares[country] || 0);
 
     // Per-bucket sim budgets: distribute newCountry × buildShares across
     // buckets, then subtract each real cluster's incremental compute from
@@ -1082,7 +1139,7 @@ function thresholdForPctDestroyed(country, pctTarget, strikeDate, preempt, cs, t
 //
 // Returns a function totalAt(t) returning total surviving compute online at t.
 function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous, cs, txEnd, tMin, tMax, step, denialYears) {
-  const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + 0.25 : Infinity;
+  const scEffStrike = (cs && cs.strikeYear != null) ? cs.strikeYear + SC_PIPELINE_DELAY : Infinity;
   const scFloorYear = Math.floor(scEffStrike);
   const cut = strikeDate + 0.05;
   // Denial window: continuous denial actively prevents new above-threshold
@@ -1134,118 +1191,117 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
   }
   realEvents.sort((a, b) => a.year - b.year);
 
-  // === Per-year analytical sim contribution ===
-  // For each year, the "gap" (newCountry - real clusters' contribution) is filled
-  // by sim clusters distributed across SIM_BUCKETS. The fraction destroyed depends
-  // on existingFrac (smooth in strikeDate) and the per-bucket fraction-above-threshold.
-  const yearContribs = [];
+  // === Per-month analytical sim contribution ===
+  // Each AIFP year's compute additions are spread uniformly across 12 months.
+  // Each month is evaluated at its own SC factor (continuous in monthCenter),
+  // not via a year-averaged factor. Each month is unambiguously pre- or
+  // post-strike, so the year-boundary smearing of existingFrac/preFrac that
+  // produced the year+0.5-0.75 bumps in delay-vs-strike-date is removed.
+  const MONTHS_PER_YEAR = 12;
+  const monthEvents = [];
   for (let yi = 1; yi < AIFP_DATA.length; yi++) {
     const [year, globalTotal] = AIFP_DATA[yi];
     const [, prevTotal] = AIFP_DATA[yi - 1];
     const baseNewGlobal = globalTotal - prevTotal;
     if (baseNewGlobal <= 0) continue;
+    const baseNewMonthly = baseNewGlobal / MONTHS_PER_YEAR;
 
     const shapeYear = laggedYear(country, year);
     const baseGlobalMax = getMaxCluster(shapeYear);
-
-    let newCountry, countryMax;
-    if (year < scFloorYear || !cs || cs.strikeYear == null) {
-      const yearShare = SHARES_NOW[country] || 0;
-      newCountry = baseNewGlobal * yearShare;
-      countryMax = Math.round(baseGlobalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
-    } else {
-      const preFrac = Math.max(0, Math.min(1, scEffStrike - year));
-      let newGlobal = baseNewGlobal;
-      let isPost = false;
-      if (preFrac < 1) {
-        const evalYear = Math.max(year, scEffStrike);
-        const baselineAtStrike = getStrikeYearBaseline(cs.strikeYear) || baseNewGlobal;
-        const psFactor = getPostStrikeFraction(country, evalYear, cs, baseNewGlobal, baselineAtStrike);
-        newGlobal = preFrac * baseNewGlobal + (1 - preFrac) * psFactor * baseNewGlobal;
-        isPost = true;
-      }
-      const effScF = baseNewGlobal > 0 ? newGlobal / baseNewGlobal : 1.0;
-      const globalMax = isPost
-        ? Math.round(baseGlobalMax * Math.max(effScF, 0.15))
-        : baseGlobalMax;
-      countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
-      const yearShares = getCountryShares(year, txEnd);
-      const yearShare = yearShares[country] || 0;
-      newCountry = newGlobal * yearShare;
-    }
-
-    // Per-bucket sim budgets after subtracting real-cluster compute from the
-    // bucket each cluster sits in (overflow spills to next-larger bucket).
     const rawShares = getNewBuildShares(shapeYear);
-    const buildShares = capBuildShares(rawShares, countryMax);
-    const simBucketBudgets = simBudgetsAfterRealSubtraction(country, year, newCountry, buildShares);
-    const gap = simBucketBudgets.reduce((s, v) => s + v, 0);
-    if (gap < 1000) continue;
+    const txEndForShares = (cs && cs.strikeYear != null) ? txEnd : Infinity;
 
-    // destroyedFracInBuckets is the budget-weighted fracAbove across buckets.
-    let destroyedFracInBuckets = 0;
-    for (let bi = 0; bi < SIM_BUCKETS.length; bi++) {
-      const [lo, rawHi] = SIM_BUCKETS[bi];
-      const hi = Math.min(rawHi, countryMax);
-      if (hi <= lo || simBucketBudgets[bi] <= 0) continue;
-      destroyedFracInBuckets += (simBucketBudgets[bi] / gap) * _analyticFracAbove(threshold, lo, hi);
+    // Real-cluster subtraction is per-AIFP-year in the source data; apportion
+    // uniformly across months. Aggregates back to the same yearly total but
+    // applied at month resolution to avoid disproportionately subtracting
+    // a month with a small SC-degraded budget.
+    const realByBucketYr = (existingNewByYearAndBucketForCountry(country).get(year)
+      || new Array(SIM_BUCKETS.length).fill(0));
+    const realByBucketM = realByBucketYr.map(x => x / MONTHS_PER_YEAR);
+
+    for (let mi = 0; mi < MONTHS_PER_YEAR; mi++) {
+      const monthCenter = year + (mi + 0.5) / MONTHS_PER_YEAR;
+      const isPostMonth = (cs && cs.strikeYear != null) && monthCenter > scEffStrike;
+      const scFactorMonth = isPostMonth
+        ? getPostStrikeFraction(country, monthCenter, cs)
+        : 1.0;
+
+      const monthGlobalMax = isPostMonth
+        ? Math.round(baseGlobalMax * Math.max(scFactorMonth, 0.15))
+        : baseGlobalMax;
+      const monthCountryMax = Math.round(monthGlobalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+      const monthShares = getCountryShares(monthCenter, txEndForShares);
+      const monthNewGlobal = baseNewMonthly * scFactorMonth;
+      const monthNewCountry = monthNewGlobal * (monthShares[country] || 0);
+
+      const buildShares = capBuildShares(rawShares, monthCountryMax);
+      // Per-bucket subtraction with overflow (clone real for this month).
+      const realLeft = realByBucketM.slice();
+      const budgets = buildShares.map(s => s * monthNewCountry);
+      for (let b = 0; b < SIM_BUCKETS.length; b++) {
+        const real = realLeft[b];
+        if (real <= budgets[b]) {
+          budgets[b] -= real;
+        } else {
+          const excess = real - budgets[b];
+          budgets[b] = 0;
+          if (b + 1 < SIM_BUCKETS.length) realLeft[b + 1] += excess;
+        }
+      }
+      const gapM = budgets.reduce((s, v) => s + v, 0);
+      if (gapM < 1) continue;
+
+      let destroyedFracM = 0;
+      for (let bi = 0; bi < SIM_BUCKETS.length; bi++) {
+        const [lo, rawHi] = SIM_BUCKETS[bi];
+        const hi = Math.min(rawHi, monthCountryMax);
+        if (hi <= lo || budgets[bi] <= 0) continue;
+        destroyedFracM += (budgets[bi] / gapM) * _analyticFracAbove(threshold, lo, hi);
+      }
+
+      // Determine pre/post relative to STRIKE itself (not scEffStrike). cs.strikeYear
+      // is the hit detection date; clusters built before strike are subject to
+      // destruction. The SC-reduction kicks in at scEffStrike (pipeline delay).
+      const isPreStrike = !cs || cs.strikeYear == null || monthCenter <= cs.strikeYear;
+      let surviving;
+      if (isPreStrike) {
+        // Pre-strike: full month budget, subject to threshold destruction.
+        surviving = gapM * (1 - destroyedFracM);
+      } else if (continuous && monthCenter <= denialEnd) {
+        // Post-strike within denial window: above-threshold builds preempted.
+        surviving = gapM * (1 - destroyedFracM);
+      } else {
+        // Post-strike, no denial: SC-reduced compute survives intact.
+        surviving = gapM;
+      }
+      if (surviving > 0) monthEvents.push({ year: monthCenter, delta: surviving });
     }
-
-    const existingFrac = _analyticExistingFrac(year, strikeDate);
-    // existing-at-strike compute that survives the strike (below threshold):
-    const existingSurv = gap * existingFrac * (1 - destroyedFracInBuckets);
-    // post-strike compute that survives. Split into the denial-window slice
-    // (above-threshold builds preempted) and the post-window slice (no denial).
-    // When continuous=false, denialEnd = strikeDate so inDenialFrac = 0 and the
-    // expression collapses to gap * (1 - existingFrac), matching the prior path.
-    const denialFracHere = continuous
-      ? Math.max(0, _analyticExistingFrac(year, denialEnd) - existingFrac)
-      : 0;
-    const postDenialFracHere = Math.max(0, (1 - existingFrac) - denialFracHere);
-    const postSurv = gap * (denialFracHere * (1 - destroyedFracInBuckets) + postDenialFracHere);
-
-    yearContribs.push({
-      year,
-      existingSurv,
-      postSurv,
-      preEnd: Math.min(year + 0.99, cut),
-      postStart: Math.max(year, cut),
-      yearEnd: year + 0.99,
-    });
   }
+  monthEvents.sort((a, b) => a.year - b.year);
 
   // === Build the time series ===
+  // Both realEvents and monthEvents are point events: each event's delta
+  // is added to the running total when t crosses event.year. The result is a
+  // monotonically increasing surviving-compute timeline (per-month resolution
+  // for the analytical contribution; per-cluster-c.year for real clusters).
   const n = Math.ceil((tMax - tMin) / step) + 1;
   const totals = new Float64Array(n);
 
   let cumReal = 0;
   let ei = 0;
+  let cumAna = 0;
+  let mi = 0;
   for (let i = 0; i < n; i++) {
     const t = tMin + i * step;
     while (ei < realEvents.length && realEvents[ei].year <= t + 0.05) {
       cumReal += realEvents[ei].delta;
       ei++;
     }
-
-    let analyticalSum = 0;
-    for (const yc of yearContribs) {
-      if (yc.existingSurv > 0) {
-        const span = yc.preEnd - yc.year;
-        if (span > 1e-6) {
-          if (t >= yc.preEnd) analyticalSum += yc.existingSurv;
-          else if (t > yc.year) analyticalSum += yc.existingSurv * (t - yc.year) / span;
-        }
-      }
-      if (yc.postSurv > 0) {
-        const span = yc.yearEnd - yc.postStart;
-        if (span > 1e-6) {
-          if (t >= yc.yearEnd) analyticalSum += yc.postSurv;
-          else if (t > yc.postStart) analyticalSum += yc.postSurv * (t - yc.postStart) / span;
-        }
-      }
+    while (mi < monthEvents.length && monthEvents[mi].year <= t) {
+      cumAna += monthEvents[mi].delta;
+      mi++;
     }
-
-    totals[i] = cumReal + analyticalSum;
+    totals[i] = cumReal + cumAna;
   }
 
   return function totalAt(t) {
@@ -1288,14 +1344,17 @@ function generateSimulatedClusters(countryStrikes, transitionEndYear) {
       let isAnyPostStrike = false;
       let postStrikeFactor = 1.0;
       if (cs && cs.strikeYear != null) {
-        const effectiveStrike = cs.strikeYear + 0.25; // 3-month pipeline delay
+        const effectiveStrike = cs.strikeYear + SC_PIPELINE_DELAY;
         const preFrac = Math.max(0, Math.min(1, effectiveStrike - year));
         if (preFrac < 1) {
-          const evalYear = Math.max(year, effectiveStrike);
-          const baselineAtStrike = getStrikeYearBaseline(cs.strikeYear) || baseNewGlobal;
-          postStrikeFactor = getPostStrikeFraction(country, evalYear, cs, baseNewGlobal, baselineAtStrike);
-          const postStrikeAddition = postStrikeFactor * baseNewGlobal;
-          newGlobal = preFrac * baseNewGlobal + (1 - preFrac) * postStrikeAddition;
+          // Integrate SC factor over the post-strike portion of year Y. Matches
+          // analyticalStrikeOutcome / analyticalSurvivingTimeline so the sampler
+          // (UI scoreboard) and the analytical (sweep) agree on the gradual
+          // 3-month SC ramp.
+          const psStart = Math.max(year - effectiveStrike, 0);
+          const psEnd = (year + 1) - effectiveStrike;
+          postStrikeFactor = avgPostStrikeFactor(country, cs, psStart, psEnd);
+          newGlobal = preFrac * baseNewGlobal + (1 - preFrac) * postStrikeFactor * baseNewGlobal;
           isAnyPostStrike = true;
         }
       }
@@ -2666,7 +2725,7 @@ export default function App() {
   const [cnNatDate, setCnNatDate] = useState(2031.0);
   const [wartime, setWartime] = useState(false); // US wartime allocation OFF by default
   const [cnWartime, setCnWartime] = useState(false); // CN wartime allocation
-  const [diffusion, setDiffusion] = useState(0.3); // reduced: wartime security, but espionage continues
+  const [diffusion, setDiffusion] = useState(0); // off by default — opt-in to algorithmic diffusion
 
   // Local fallback only: legacy MAIM saturating-speedup. Used when Python
   // backend is off/offline. When backend is on, remoteAlgoFns override this.
@@ -2704,6 +2763,22 @@ export default function App() {
   const [lastFetchedKey, setLastFetchedKey] = useState("");
 
   const [customFlop, setCustomFlop] = useState(false);
+
+  // Debug: expose state setters on window for programmatic UI control during audits.
+  useEffect(() => {
+    window.__setUI = {
+      // Strike toggles + params
+      setCnAtkEnabled, setCnAtkStrikeDate, setCnAtkPctDestroyed, setCnAtkPctMode, setCnAtkPreempt, setCnAtkThreshold, setCnAtkDenialYears,
+      setUsAtkEnabled, setUsAtkStrikeDate, setUsAtkPctDestroyed, setUsAtkPctMode, setUsAtkPreempt, setUsAtkThreshold, setUsAtkDenialYears,
+      setTsmcDestroyed, setUsStrikeCnFabs,
+      // Nationalization
+      setCnNatEnabled, setCnNatDate, setUsNatEnabled, setUsNatDate,
+      // Diffusion + milestone
+      setDiffusion, setFlopExp, setCustomFlop,
+      // Trigger Run Model
+      run: () => setRunVersion(v => v + 1),
+    };
+  }, []);
 
   // === Parameter sweep panel state ===
   const [sweepOpen, setSweepOpen] = useState(false);
@@ -2868,7 +2943,7 @@ export default function App() {
       // Only keep sims for the effective strike year and later (these have pro-rated SC applied)
       return scSimsFiltered.filter(pt => {
         const cs = countryStrikes[pt.country];
-        return cs ? Math.floor(pt.year) >= Math.floor(cs.strikeYear + 0.25) : false;
+        return cs ? Math.floor(pt.year) >= Math.floor(cs.strikeYear + SC_PIPELINE_DELAY) : false;
       });
     })() : [];
 
@@ -2876,7 +2951,7 @@ export default function App() {
     const origSimPreStrike = points.filter(pt => {
       if (!pt.sim) return false;
       const cs = countryStrikes[pt.country];
-      return cs ? Math.floor(pt.year) < Math.floor(cs.strikeYear + 0.25) : true;
+      return cs ? Math.floor(pt.year) < Math.floor(cs.strikeYear + SC_PIPELINE_DELAY) : true;
     });
 
     // Delta-shrink real planned DCs per-country
@@ -3048,8 +3123,20 @@ export default function App() {
       });
 
       const postScale = (totalGpusVal, time) => {
-        const compShare = (natEnabled && time >= natDate) ? 0.9 : getCompanyShareOfNational(time);
-        return totalGpusVal * compShare * alloc.training;
+        // Under nationalization, the company gets 0.9 of national compute. The
+        // customer-inference workload is preserved at its counterfactual
+        // (no-nat) absolute amount — the nation doesn't ask the leading lab
+        // to scale customer service up by 4.5x. The remaining nationalized
+        // pool is split across training/experimental/internal proportionally
+        // to their alloc fractions.
+        if (natEnabled && time >= natDate) {
+          const customerKept = totalGpusVal * getCompanyShareOfNational(time) * alloc.customer;
+          const companyTotal = totalGpusVal * 0.9;
+          const internalPool = Math.max(0, companyTotal - customerKept);
+          const denom = alloc.training + alloc.experimental + alloc.internal;
+          return internalPool * (alloc.training / denom);
+        }
+        return totalGpusVal * getCompanyShareOfNational(time) * alloc.training;
       };
 
       // Attack timelines: surviving compute uses the analytical bucket model
@@ -3420,6 +3507,21 @@ export default function App() {
     const cnS = computeStats("China", cnNatEnabled, cnNatDate, effUsAtkThreshold, effUsAtkStrikeDateSC, usAtkSCActive, diffusion, usActualCompanyFn, usAtkPreempt, usAtkDenialYears);
     const allyS = computeStats("Ally", false, 2050, effCnAtkThreshold, effCnAtkStrikeDate, cnAtkSCActive, 0, null, cnAtkPreempt, cnAtkDenialYears);
     const otherS = computeStats("Other", false, 2050, 1e11, NOW, false, 0, null, false);
+    // Debug: expose the live scoreboard's stats so we can compare to sweep output.
+    try {
+      window.__liveStats = {
+        US: { milestoneDates: usS.milestoneDates, milestoneDatesAttack: usS.milestoneDatesAttack,
+              baselineDone: usS.baselineDone, earliestDone: usS.earliestDone,
+              attackDelay: usS.attackDelay },
+        China: { milestoneDates: cnS.milestoneDates, milestoneDatesAttack: cnS.milestoneDatesAttack,
+                 baselineDone: cnS.baselineDone, earliestDone: cnS.earliestDone,
+                 attackDelay: cnS.attackDelay },
+        ui: { cnAtkEnabled, usAtkEnabled, cnAtkPctMode, usAtkPctMode,
+              cnAtkPctDestroyed, usAtkPctDestroyed,
+              cnAtkStrikeDate, usAtkStrikeDate, effCnAtkStrikeDate, effUsAtkStrikeDate,
+              tsmcDestroyed, usStrikeCnFabs, diffusion, cnNatEnabled, usNatEnabled },
+      };
+    } catch (e) { /* ignore */ }
     return { usS, cnS, allyS, otherS };
     // Manual-trigger model: heavy stats only recompute when runVersion changes
     // (Run Model button) or when the AIFP backend toggle / fetch result changes.
@@ -3689,17 +3791,36 @@ export default function App() {
         combos = next;
       }
       const baseState = { ...takeStateSnapshot(), ...hold };
+      // syncAxes: per-probe, mirror one axis's value into another field.
+      // e.g. { cnAtkStrikeDate: 'usAtkStrikeDate' } makes CN strike happen at the same date as US strike.
+      const syncAxes = config.syncAxes || {};
 
-      // Build scenarios: one baseline per defender + one attack per (probe, defender)
+      // Build scenarios: one baseline per defender + one attack per (probe, defender).
+      // ALWAYS include US-baseline as the calibration anchor — AIFP's
+      // _select_calibration_scenario picks the scenario named exactly
+      // "US-baseline" first, then any "US-" prefix, then scenarios[0]. If
+      // US isn't in defenders, the previous code would let AIFP calibrate
+      // r_software against (say) China's smaller compute series, producing
+      // unrealistically early milestones. Matching the UI scoreboard's
+      // behavior of always anchoring on US fixes this.
       const scenarios = [];
-      const baselineIdFor = (def) => `__baseline-${def}`;
+      const baselineIdFor = (def) => def === 'US' ? 'US-baseline' : `__baseline-${def}`;
+      const usCd = countryData('US');
+      scenarios.push({ id: 'US-baseline', compute_timeline: usCd.baselineTL, initial_progress: 0, alloc: ALLOC });
       for (const def of defenders) {
+        if (def === 'US') continue;  // US-baseline already pushed above
         const cd = countryData(def);
         scenarios.push({ id: baselineIdFor(def), compute_timeline: cd.baselineTL, initial_progress: 0, alloc: ALLOC });
       }
+      // baselineCount = total baseline scenarios at the front of `scenarios`
+      const baselineCount = scenarios.length;
       const probeMeta = [];
       for (let i = 0; i < combos.length; i++) {
         const s = { ...baseState, ...combos[i] };
+        // Apply syncAxes: copy value of srcKey into dstKey per probe.
+        for (const [dstKey, srcKey] of Object.entries(syncAxes)) {
+          if (srcKey in s) s[dstKey] = s[srcKey];
+        }
         const sc = deriveSC(s);
         const perDef = {};
         for (const def of defenders) {
@@ -3709,17 +3830,25 @@ export default function App() {
           const T = (cs && effSd != null) ? effThresholdFor(def, s, sc) : Infinity;
           const denialYears = def === 'US' ? s.cnAtkDenialYears : s.usAtkDenialYears;
           const txEnd = txEndFor(s);
+          // "Nat in response to strike": when usNatEnabled (or cnNatEnabled for
+          // a China defender) is set in this probe, nationalization fires at
+          // the strike date, lifting company share of national compute from
+          // getCompanyShareOfNational(t) to 0.9. Pre-strike share is unchanged
+          // (no strike yet to respond to), so the no-strike calibration anchor
+          // is consistent across nat-on and nat-off probes.
+          const natEnabled = !!(def === 'US' ? s.usNatEnabled : s.cnNatEnabled);
+          const probeShare = (t) => (natEnabled && effSd != null && t >= effSd) ? 0.9 : getCompanyShareOfNational(t);
           let tl;
           if (cs && effSd != null && isFinite(T)) {
             const survT = analyticalSurvivingTimeline(def, T, effSd, def === 'US' ? s.cnAtkPreempt : s.usAtkPreempt, cs, txEnd, NOW, 2041, 0.05, denialYears);
-            const attackFn = (t) => (t < effSd) ? cd.baselineCompanyFn(t) : survT(t) * cd.actualShare(t);
+            const attackFn = (t) => (t < effSd) ? cd.baselineCompanyFn(t) : survT(t) * probeShare(t);
             tl = sampleTL(attackFn, effSd);
           } else {
             tl = cd.baselineTL;
           }
           const id = `__probe-${i}-${def}`;
           scenarios.push({ id, compute_timeline: tl, initial_progress: 0, alloc: ALLOC });
-          perDef[def] = { id, cs, effSd, threshold: T, txEnd };
+          perDef[def] = { id, cs, effSd, threshold: T, txEnd, natEnabled };
         }
         probeMeta.push({ idx: i, axes: combos[i], state: s, sc, perDef });
       }
@@ -3727,7 +3856,6 @@ export default function App() {
       // POST in chunks (always include all baselines as calibration anchors)
       window.__sweepProgress = { phase: 'posting', done: 0, total: scenarios.length };
       const respMap = {};
-      const baselineCount = defenders.length;
       const CHUNK = 24;
       for (let i = baselineCount; i < scenarios.length; i += CHUNK) {
         const chunk = [...scenarios.slice(0, baselineCount), ...scenarios.slice(i, Math.min(i + CHUNK, scenarios.length))];
@@ -3755,7 +3883,84 @@ export default function App() {
         }
         return 2040;
       }
-      function milestoneFor(scenarioId, _country, threshold) {
+      // Build a per-probe training-compute extractor. Under nat (after strike),
+      // the customer-inference workload is preserved at its counterfactual
+      // no-nat level; the rest of the nationalized pool splits across
+      // training/experimental/internal proportionally to their alloc shares.
+      // companyTotal here is the trajectory value (= survT(t) * 0.9 post-strike
+      // under nat, or survT(t) * share(t) post-strike under no-nat).
+      function makePostScale(natEnabled, effSd) {
+        if (!natEnabled || effSd == null) {
+          return (companyTotal, _t) => companyTotal * alloc.training;
+        }
+        const denom = alloc.training + alloc.experimental + alloc.internal;
+        const trainingShareOfInternal = alloc.training / denom;
+        return (companyTotal, t) => {
+          if (t < effSd) return companyTotal * alloc.training;
+          const customerFrac = getCompanyShareOfNational(t) * alloc.customer / 0.9;
+          const internalPool = Math.max(0, companyTotal * (1 - customerFrac));
+          return internalPool * trainingShareOfInternal;
+        };
+      }
+
+      // Build a list of candidate (cluster size, availability year) pairs to
+      // try in bestCompletionV2 — matching the scoreboard's iteration over
+      // real clusters. Candidates:
+      //   - Real surviving cluster phases (Pareto-filtered), with SC reduction
+      //     applied to post-strike phases. Pre-strike phases at or above
+      //     threshold are destroyed and excluded.
+      //   - countryMax(year) × SC factor at year, for each future AIFP year
+      //     (max sim-cluster ceiling — relevant when real clusters get
+      //     destroyed by a high-pct strike).
+      //   - threshold as a fallback ceiling (max pre-strike surviving size).
+      // For baselines: only need a single huge effGpus (the no-cap case).
+      //
+      // Previously omitted real-cluster phases, which caused discrete
+      // delay jumps when the integer-year sim-cluster candidate's SC factor
+      // crossed the phase-in / recovery boundary (visible as ~0.3 yr
+      // step changes around strike-date 2031.5-2032 in SC-only sweeps).
+      function clusterCandidatesFor(threshold, cs, country) {
+        const candidates = [];
+        const baseEff = Math.max(1000, threshold);
+        candidates.push({ eff: baseEff, avail: frontierAvailYear(baseEff) });
+        // Real surviving cluster phases — mirrors live UI's
+        // paretoPhases(survivingSites.flatMap(s => s.phases)) pattern.
+        const realPhases = [];
+        for (const c of ALL_CLUSTERS) {
+          if (c.country !== country) continue;
+          if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+          const isPostStrike = cs && cs.strikeYear != null && c.year > cs.strikeYear && c.year > NOW;
+          let gpus = c.gpus;
+          if (isPostStrike) {
+            const factor = getRecoveredSCFactor(country, c.year, cs);
+            gpus = Math.round(c.gpus * factor);
+            if (gpus < 1000) continue;
+          } else {
+            if (gpus >= threshold) continue;
+          }
+          realPhases.push({ gpus, year: Math.max(NOW, c.year) });
+        }
+        // Pareto-filter: keep only phases not dominated on both axes.
+        realPhases.sort((a, b) => b.gpus - a.gpus);
+        let earliestSoFar = Infinity;
+        for (const p of realPhases) {
+          if (p.year < earliestSoFar) {
+            candidates.push({ eff: p.gpus, avail: p.year });
+            earliestSoFar = p.year;
+          }
+        }
+        if (cs && cs.strikeYear != null) {
+          for (let y = Math.max(Math.ceil(cs.strikeYear), Math.floor(NOW)); y <= 2040; y++) {
+            const cm = getMaxCluster(y);
+            const scF = getPostStrikeFraction(country, y, cs);
+            const sized = Math.round(cm * scF);
+            if (sized > 1000) candidates.push({ eff: sized, avail: Math.max(NOW, y) });
+          }
+        }
+        return candidates;
+      }
+
+      function milestoneFor(scenarioId, _country, threshold, postScale, cs) {
         const r = respMap[scenarioId];
         if (!r || !r.time || !r.algo_multiplier) return null;
         const algoAt = mkInterp(r.time, r.algo_multiplier);
@@ -3763,22 +3968,36 @@ export default function App() {
         if (!sc) return null;
         const tlAt = tlInterp(sc.compute_timeline);
         const isAttack = isFinite(threshold);
-        const effGpus = isAttack ? Math.max(1000, threshold) : 1e12;
-        const availYear = isAttack ? frontierAvailYear(effGpus) : NOW;
+        const ps = postScale || wartimePostScale;
         const out = {};
-        for (const key of measure) {
-          const t = milestoneTargets[key];
-          if (!t) { out[key] = null; continue; }
-          const res = bestCompletionV2(effGpus, availYear, tlAt, t.pre, t.post, algoAt, p, eta, u, NOW, wartimePostScale, wartimePostScale);
-          out[key] = isFinite(res.done) ? res.done : null;
+        if (!isAttack) {
+          for (const key of measure) {
+            const t = milestoneTargets[key];
+            if (!t) { out[key] = null; continue; }
+            const res = bestCompletionV2(1e12, NOW, tlAt, t.pre, t.post, algoAt, p, eta, u, NOW, ps, ps);
+            out[key] = isFinite(res.done) ? res.done : null;
+          }
+        } else {
+          const candidates = clusterCandidatesFor(threshold, cs, _country);
+          for (const key of measure) {
+            const t = milestoneTargets[key];
+            if (!t) { out[key] = null; continue; }
+            let bestDone = Infinity;
+            for (const cand of candidates) {
+              const res = bestCompletionV2(cand.eff, cand.avail, tlAt, t.pre, t.post, algoAt, p, eta, u, NOW, ps, ps);
+              if (res.done < bestDone) bestDone = res.done;
+            }
+            out[key] = isFinite(bestDone) ? bestDone : null;
+          }
         }
         return out;
       }
 
-      // Compute baseline milestones per defender
+      // Compute baseline milestones per defender (no-strike, no-nat — nat only
+      // fires in response to a strike, and there's no strike in the baseline)
       const baseline = {};
       for (const def of defenders) {
-        baseline[def] = milestoneFor(baselineIdFor(def), def, Infinity);
+        baseline[def] = milestoneFor(baselineIdFor(def), def, Infinity, wartimePostScale);
       }
 
       // Compute per-probe milestones + extras
@@ -3786,12 +4005,14 @@ export default function App() {
         const stats = {};
         for (const def of defenders) {
           const meta = p.perDef[def];
-          const ms = milestoneFor(meta.id, def, meta.threshold);
+          const probePostScale = makePostScale(meta.natEnabled, meta.effSd);
+          const ms = milestoneFor(meta.id, def, meta.threshold, probePostScale, meta.cs);
           const bl = baseline[def];
           const delays = {};
           for (const key of measure) {
-            // An attack can't make completion faster than the no-attack baseline
-            if (ms && bl && ms[key] != null && bl[key] != null && ms[key] < bl[key]) ms[key] = bl[key];
+            // No clamp on negative delays — nationalization can push a milestone
+            // earlier than the no-nat no-strike baseline, and we want to surface
+            // that.
             delays['delay_' + key] = (ms && bl && ms[key] != null && bl[key] != null) ? ms[key] - bl[key] : null;
           }
           const out = { ...ms, ...delays, threshold: meta.threshold };
@@ -4110,14 +4331,15 @@ export default function App() {
             let growthAddition = origGrowth;
             let scActive = false;
             if (cs) {
-              const effectiveStrike = cs.strikeYear + 0.25;
+              const effectiveStrike = cs.strikeYear + SC_PIPELINE_DELAY;
               const preFrac = Math.max(0, Math.min(1, effectiveStrike - yr));
               if (preFrac < 1) {
-                const evalYear = Math.max(yr, effectiveStrike);
-                const anchor = strikeYearAddition != null ? strikeYearAddition : origGrowth;
-                const postStrikeFraction = getPostStrikeFraction(c, evalYear, cs, origGrowth, anchor);
-                const postStrikeAddition = postStrikeFraction * origGrowth;
-                growthAddition = preFrac * origGrowth + (1 - preFrac) * postStrikeAddition;
+                // Integrate SC factor over the post-strike portion of year yr
+                // (matches the analytical functions and the sampler).
+                const psStart = Math.max(yr - effectiveStrike, 0);
+                const psEnd = (yr + 1) - effectiveStrike;
+                const postStrikeFraction = avgPostStrikeFactor(c, cs, psStart, psEnd);
+                growthAddition = preFrac * origGrowth + (1 - preFrac) * postStrikeFraction * origGrowth;
                 scActive = true;
               }
             }
@@ -5262,13 +5484,21 @@ export default function App() {
                     Continuous denial
                   </label>
                   <div style={{ fontSize:9, color:"#475569", fontFamily:"var(--f)", marginBottom:6, paddingLeft:16, lineHeight:1.3 }}>
-                    {atk.preempt ? `Above-threshold builds prevented for ${atk.denialYears < 1 ? `${Math.round(atk.denialYears*12)} months` : `${atk.denialYears} year${atk.denialYears===1?"":"s"}`} after strike, then normal building resumes.` : "Strike once only: existing clusters destroyed, but future builds proceed."}
+                    {atk.preempt ? (
+                      !isFinite(atk.denialYears)
+                        ? "Above-threshold builds prevented indefinitely (legacy preempt-forever semantics)."
+                        : `Above-threshold builds prevented for ${atk.denialYears < 1 ? `${Math.round(atk.denialYears*12)} months` : `${atk.denialYears} year${atk.denialYears===1?"":"s"}`} after strike, then normal building resumes.`
+                    ) : "Strike once only: existing clusters destroyed, but future builds proceed."}
                   </div>
                   {atk.preempt && (
                     <div style={{ display:"flex", gap:4, marginBottom:8, paddingLeft:16 }}>
-                      {[0.5, 1, 2, 5].map(y => (
-                        <Btn key={y} active={Math.abs(atk.denialYears - y) < 0.01} onClick={() => atk.setDenialYears(y)}>
-                          {y < 1 ? `${Math.round(y*12)}mo` : `${y}y`}
+                      {[0.5, 1, 2, 5, Infinity].map(y => (
+                        <Btn
+                          key={String(y)}
+                          active={isFinite(y) ? Math.abs(atk.denialYears - y) < 0.01 : !isFinite(atk.denialYears)}
+                          onClick={() => atk.setDenialYears(y)}
+                        >
+                          {!isFinite(y) ? "∞" : y < 1 ? `${Math.round(y*12)}mo` : `${y}y`}
                         </Btn>
                       ))}
                     </div>
