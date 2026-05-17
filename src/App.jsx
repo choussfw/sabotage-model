@@ -1322,10 +1322,15 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
         destroyedFracM += (budgets[bi] / gapM) * _analyticFracAbove(threshold, lo, hi);
       }
 
-      // Determine pre/post relative to STRIKE itself (not scEffStrike). cs.strikeYear
-      // is the hit detection date; clusters built before strike are subject to
-      // destruction. The SC-reduction kicks in at scEffStrike (pipeline delay).
-      const isPreStrike = !cs || cs.strikeYear == null || monthCenter <= cs.strikeYear;
+      // Determine pre/post relative to STRIKE itself (not scEffStrike). The
+      // cluster strike happens at strikeDate (function arg, always defined),
+      // independent of whether an SC strike accompanies it. Previously this
+      // condition used cs.strikeYear; when cs===null (no SC strike) it forced
+      // isPreStrike=true for every month, perpetually filtering above-threshold
+      // future builds and effectively producing infinite continuous denial in
+      // cluster-only scenarios. Manifests when fab strikes are disabled but
+      // cluster strikes are enabled.
+      const isPreStrike = monthCenter <= strikeDate;
       let surviving;
       if (isPreStrike) {
         // Pre-strike: full month budget, subject to threshold destruction.
