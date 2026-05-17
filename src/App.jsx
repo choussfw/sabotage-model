@@ -589,10 +589,20 @@ const AIFP_MAX_CLUSTER = [
   [2036, 244000000], [2037, 354000000], [2038, 495600000], [2039, 669000000], [2040, 870000000],
 ];
 function getMaxCluster(year) {
-  for (let i = AIFP_MAX_CLUSTER.length - 1; i >= 0; i--) {
-    if (year >= AIFP_MAX_CLUSTER[i][0]) return AIFP_MAX_CLUSTER[i][1];
+  // Linear-in-log interpolation between adjacent integer-year cap values so
+  // fractional years (from time-varying lag) produce smooth transitions.
+  if (year <= AIFP_MAX_CLUSTER[0][0]) return AIFP_MAX_CLUSTER[0][1];
+  for (let i = 0; i < AIFP_MAX_CLUSTER.length - 1; i++) {
+    const [y0, v0] = AIFP_MAX_CLUSTER[i];
+    const [y1, v1] = AIFP_MAX_CLUSTER[i + 1];
+    if (year >= y0 && year < y1) {
+      const f = (year - y0) / (y1 - y0);
+      // Interpolate in log space (caps grow geometrically)
+      const lv = Math.log(v0) + f * (Math.log(v1) - Math.log(v0));
+      return Math.exp(lv);
+    }
   }
-  return AIFP_MAX_CLUSTER[0][1];
+  return AIFP_MAX_CLUSTER[AIFP_MAX_CLUSTER.length - 1][1];
 }
 
 // Per-year NEW BUILD bucket shares — fraction of each year's NEW US compute in each tier.
@@ -626,8 +636,15 @@ const NEW_BUILD_ANCHORS = {
 };
 
 function getNewBuildShares(year) {
-  const yr = Math.floor(year);
-  return NEW_BUILD_ANCHORS[yr] || [0.05, 0.15, 0.25, 0.30, 0.20, 0.05];
+  const lo = Math.floor(year);
+  const hi = lo + 1;
+  const a = NEW_BUILD_ANCHORS[lo];
+  const b = NEW_BUILD_ANCHORS[hi];
+  const fallback = [0.05, 0.15, 0.25, 0.30, 0.20, 0.05];
+  if (!a) return b || fallback;
+  if (!b) return a;
+  const f = year - lo;
+  return a.map((v, i) => v * (1 - f) + b[i] * f);
 }
 
 // Apply AIFP max cluster cap: redistribute budget from invalid buckets downward
@@ -647,6 +664,13 @@ function capBuildShares(shares, maxSize) {
 // naturally from compute share: smaller blocs have smaller new-build budgets, so they
 // sample fewer clusters from the same lognormal and the max-of-N is naturally smaller.
 const SIM_MAX_MULTIPLIER = { US: 1.0, China: 1.0, Ally: 1.0, Other: 1.0 };
+// Runtime-override helper for testing CN-specific structural caps without rebuilding.
+function simMaxMultFor(country) {
+  if (typeof window !== 'undefined' && window.__SIM_MAX_OVERRIDE && window.__SIM_MAX_OVERRIDE[country] != null) {
+    return window.__SIM_MAX_OVERRIDE[country];
+  }
+  return SIM_MAX_MULTIPLIER[country] || 1.0;
+}
 
 // Per-bloc DISTRIBUTION-SHAPE lag (in years). Compute totals are unchanged; only
 // the SHAPE of the buildout (cluster-size distribution and per-year cluster-size cap)
@@ -655,8 +679,47 @@ const SIM_MAX_MULTIPLIER = { US: 1.0, China: 1.0, Ally: 1.0, Other: 1.0 };
 // dispersion, provincial grid-capacity limits — not chip quality or compute totals
 // (those are handled separately via country shares).
 const BLOC_SHAPE_LAG = { US: 0, China: 1, Ally: 0, Other: 0 };
+// Default flat σ-offset for China relative to US. Set to 0.20 = the US σ
+// growth from 2024→2025 under the paper fit σ(t) = 1.629 + 0.718·ln(t−2021).
+// This is the "1 year of US σ growth" interpretation of the lag, but pinned
+// to a constant σ gap rather than a constant year offset — avoids the
+// convergence artifact where the per-year σ change shrinks as ln(t−2021)
+// saturates. Empirical 2024 σ_US−σ_CN ≈ 0.32 from Epoch ≥1K-cluster fits;
+// the 0.20 default is below that, reflecting that the Epoch dataset
+// undersamples Chinese clusters and the true σ_CN is likely tighter.
+const CN_SIGMA_OFFSET_DEFAULT = 0.20;
+// Runtime overrides:
+//   - window.__BLOC_SHAPE_LAG_MODE = "constant_year": use BLOC_SHAPE_LAG as a fixed
+//     year-lag (legacy behavior).
+//   - window.__cnSigmaOffset = <number>: override the constant σ gap value.
+//   - default (no override): constant_sigma_gap with CN_SIGMA_OFFSET_DEFAULT.
 function laggedYear(country, year) {
-  return Math.max(2023, year - (BLOC_SHAPE_LAG[country] || 0));
+  if (typeof window !== 'undefined' && window.__BLOC_SHAPE_LAG_MODE === 'constant_year') {
+    return Math.max(2023, year - (BLOC_SHAPE_LAG[country] || 0));
+  }
+  if (country !== 'China') {
+    return Math.max(2023, year - (BLOC_SHAPE_LAG[country] || 0));
+  }
+  // Multiplicative mode (window.__cnSigmaMode === 'multiplicative'):
+  // σ_CN(t) = f · σ_US(t), where σ_US(t) = a + b·ln(t-2021), a=1.629, b=0.718.
+  // Solve for shapeYear t' such that σ_US(t') = f · σ_US(t):
+  //   ln(t'−2021) = (a(f−1))/b + f · ln(t−2021)
+  //   t'−2021 = exp(a(f−1)/b) · (t−2021)^f
+  if (typeof window !== 'undefined' && window.__cnSigmaMode === 'multiplicative') {
+    const f = typeof window.__cnSigmaScale === 'number' ? window.__cnSigmaScale : 0.70;
+    const a = 1.629, b = 0.718;
+    const t = Math.max(year - 2021, 0.5);
+    const shapeOffset = Math.exp(a * (f - 1) / b) * Math.pow(t, f);
+    return Math.max(2023, 2021 + shapeOffset);
+  }
+  // Default: constant_sigma_gap. Solve σ_US(t) − σ_US(t') = δ:
+  //   t' − 2021 = (t − 2021) · exp(−δ/b)
+  const offset = (typeof window !== 'undefined' && typeof window.__cnSigmaOffset === 'number')
+    ? window.__cnSigmaOffset
+    : CN_SIGMA_OFFSET_DEFAULT;
+  const t = Math.max(year - 2021, 0.5);
+  const scale = Math.exp(-offset / 0.718);
+  return Math.max(2023, 2021 + scale * t);
 }
 
 
@@ -1036,7 +1099,7 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
     const globalMax = isPost
       ? Math.round(baseGlobalMax * Math.max(effScF, 0.15))
       : baseGlobalMax;
-    const countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+    const countryMax = Math.round(globalMax * (simMaxMultFor(country)));
     const txEndForShares = (cs && cs.strikeYear != null) ? txEnd : Infinity;
     const yearShares = getCountryShares(year, txEndForShares);
     const newCountry = newGlobal * (yearShares[country] || 0);
@@ -1229,7 +1292,7 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
       const monthGlobalMax = isPostMonth
         ? Math.round(baseGlobalMax * Math.max(scFactorMonth, 0.15))
         : baseGlobalMax;
-      const monthCountryMax = Math.round(monthGlobalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+      const monthCountryMax = Math.round(monthGlobalMax * (simMaxMultFor(country)));
       const monthShares = getCountryShares(monthCenter, txEndForShares);
       const monthNewGlobal = baseNewMonthly * scFactorMonth;
       const monthNewCountry = monthNewGlobal * (monthShares[country] || 0);
@@ -1364,7 +1427,7 @@ function generateSimulatedClusters(countryStrikes, transitionEndYear) {
         ? Math.round(baseGlobalMaxLagged * Math.max(effScF, 0.15))
         : baseGlobalMaxLagged;
 
-      const countryMax = Math.round(globalMax * (SIM_MAX_MULTIPLIER[country] || 1.0));
+      const countryMax = Math.round(globalMax * (simMaxMultFor(country)));
       const buildShares = capBuildShares(rawSharesLagged, countryMax);
       const yearShares = getCountryShares(year, txEnd);
       const newCountry = newGlobal * yearShares[country];
