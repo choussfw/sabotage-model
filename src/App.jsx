@@ -473,14 +473,22 @@ const AIFP_DATA = [
 // landing U.S. at 84.3%. Linear interpolation between SHARES_TRANSITION_START
 // and the earliest enabled strike date.
 const SHARES_NOW = { US: 0.80, China: 0.138, Ally: 0.056, Other: 0.006 };
-const SHARES_AT_STRIKE = { US: 0.843, China: 0.091, Ally: 0.060, Other: 0.006 };
+// CN drops to 9.1% per BIS crackdown assumption (cf. comment above).
+// U.S. share is held CONSTANT — the freed 4.7pp does not redistribute to
+// U.S. (modeling the crackdown as shrinking global compute rather than
+// reallocating it to U.S.). Total intentionally < 1.0.
+const SHARES_AT_STRIKE = { US: 0.80, China: 0.091, Ally: 0.060, Other: 0.006 };
 const SHARES_TRANSITION_START = 2026.33; // April 2026
+// BIS crackdown completes by 2031 in our modeled world — pinned date,
+// independent of any kinetic strike scenario. Applies to every caller.
+const SHARES_TRANSITION_END = 2031.0;
 
-function getCountryShares(year, transitionEndYear) {
+function getCountryShares(year, _transitionEndYear /* deprecated; use SHARES_TRANSITION_END */) {
   const t0 = SHARES_TRANSITION_START;
-  if (!isFinite(transitionEndYear) || transitionEndYear <= t0 || year <= t0) return SHARES_NOW;
-  if (year >= transitionEndYear) return SHARES_AT_STRIKE;
-  const f = (year - t0) / (transitionEndYear - t0);
+  const t1 = SHARES_TRANSITION_END;
+  if (year <= t0) return SHARES_NOW;
+  if (year >= t1) return SHARES_AT_STRIKE;
+  const f = (year - t0) / (t1 - t0);
   return {
     US: SHARES_NOW.US + f * (SHARES_AT_STRIKE.US - SHARES_NOW.US),
     China: SHARES_NOW.China + f * (SHARES_AT_STRIKE.China - SHARES_NOW.China),
@@ -2778,7 +2786,7 @@ export default function App() {
   const [usStrikeCnFabs, setUsStrikeCnFabs] = useState(true);
 
   // SAR target in Feb-2025 eFLOP (1e33), shifted to March-2026 internal reference
-  const [flopExp, setFlopExp] = useState(Math.log10(1e33) - FLOP_EPOCH_SHIFT);
+  const [flopExp, setFlopExp] = useState(Math.log10(8e37) - FLOP_EPOCH_SHIFT);  // ASI default
   const [eta, setEta] = useState(0.43);
   const [u, setU] = useState(0.90);
   const [alpha, setAlpha] = useState(0.5);
