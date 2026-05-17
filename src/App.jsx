@@ -607,36 +607,32 @@ function getMaxCluster(year) {
 
 // Per-year NEW BUILD bucket shares — fraction of each year's NEW US compute in each tier.
 // Computed from a per-year lognormal Lognormal(mu_new(t), sigma(t)) of new builds, with
-// iterative cap-and-redistribute at AIFP_MAX_CLUSTER.
-//
-// 2026-11 refit: σ and N now derived from clusters >=100 H100e in the Epoch dataset
-// (vs the original paper fit on the full dataset ≥10 H100e). The paper fit was dominated
-// by a long tail of tiny clusters, inflating σ; the more aggressive σ growth made the
-// model's target-count dynamics dominated by σ-widening (concentration) rather than
-// compute growth. At ≥100, σ stays modest (1.16 → 2.66 over 2022→2040 vs 1.6 → 3.8).
-//   sigma(t) = 1.16 + 0.51 * ln(t - 2021)
-//   N_new(t) = N(t) - N(t-1) where N(t) = 125.6 * exp(0.295 * (t-2025))
+// iterative cap-and-redistribute at AIFP_MAX_CLUSTER. Replaces the prior cumul-share-diff
+// derivation, which clipped negative diffs and incorrectly produced zero new builds in
+// some buckets when their cumul share dropped (e.g., 2030 1M-10M).
+//   sigma(t) = 1.639 + 0.688 * ln(t - 2021)
+//   N_new(t) = N(t) - N(t-1) where N(t) = 246 * exp(0.296 * (t-2025))
 //   T_new(t) = (AIFP[t] - AIFP[t-1]) * us_share(t)
 //   mu_new(t) = ln(T_new / N_new) - sigma^2 / 2
 const NEW_BUILD_ANCHORS = {
   2023: [1.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000],
-  2024: [0.293128, 0.706872, 0.000000, 0.000000, 0.000000, 0.000000],
-  2025: [0.061994, 0.819667, 0.118339, 0.000000, 0.000000, 0.000000],
-  2026: [0.019155, 0.298169, 0.682676, 0.000000, 0.000000, 0.000000],
-  2027: [0.007628, 0.131461, 0.724709, 0.136202, 0.000000, 0.000000],
-  2028: [0.003653, 0.069567, 0.456193, 0.470587, 0.000000, 0.000000],
-  2029: [0.001781, 0.037417, 0.286857, 0.673945, 0.000000, 0.000000],
-  2030: [0.001302, 0.026684, 0.209632, 0.639161, 0.123220, 0.000000],
-  2031: [0.000996, 0.020040, 0.161026, 0.522462, 0.295475, 0.000000],
-  2032: [0.000759, 0.015290, 0.127473, 0.443803, 0.412676, 0.000000],
-  2033: [0.000671, 0.013026, 0.107896, 0.384424, 0.493983, 0.000000],
-  2034: [0.000537, 0.010437, 0.088756, 0.333096, 0.554978, 0.012196],
-  2035: [0.000441, 0.008539, 0.074143, 0.290637, 0.517238, 0.109002],
-  2036: [0.000389, 0.007408, 0.064514, 0.258921, 0.481380, 0.187388],
-  2037: [0.000343, 0.006451, 0.056540, 0.232610, 0.451428, 0.252627],
-  2038: [0.000303, 0.005646, 0.049899, 0.210519, 0.425932, 0.307701],
-  2039: [0.000271, 0.005009, 0.044576, 0.192298, 0.403867, 0.353980],
-  2040: [0.000246, 0.004500, 0.040276, 0.177194, 0.384813, 0.392970],
+  2024: [0.016746, 0.983254, 0.000000, 0.000000, 0.000000, 0.000000],
+  2025: [0.011630, 0.197665, 0.790705, 0.000000, 0.000000, 0.000000],
+  2026: [0.008652, 0.106117, 0.885231, 0.000000, 0.000000, 0.000000],
+  2027: [0.005682, 0.061209, 0.356242, 0.576867, 0.000000, 0.000000],
+  2028: [0.003454, 0.036976, 0.222846, 0.736723, 0.000000, 0.000000],
+  2029: [0.002107, 0.022728, 0.142606, 0.832558, 0.000000, 0.000000],
+  2030: [0.001796, 0.018145, 0.109512, 0.395538, 0.475009, 0.000000],
+  2031: [0.001523, 0.014727, 0.086974, 0.314237, 0.582539, 0.000000],
+  2032: [0.001270, 0.012021, 0.070802, 0.259916, 0.655990, 0.000000],
+  2033: [0.001182, 0.010707, 0.061348, 0.222682, 0.704080, 0.000000],
+  2034: [0.001000, 0.008944, 0.051318, 0.189186, 0.448508, 0.301043],
+  2035: [0.000861, 0.007598, 0.043561, 0.162476, 0.394596, 0.390906],
+  2036: [0.000784, 0.006764, 0.038361, 0.143132, 0.351643, 0.459315],
+  2037: [0.000708, 0.006014, 0.033914, 0.127096, 0.316782, 0.515485],
+  2038: [0.000637, 0.005351, 0.030119, 0.113705, 0.288107, 0.562080],
+  2039: [0.000577, 0.004802, 0.027009, 0.102740, 0.264489, 0.600382],
+  2040: [0.000526, 0.004346, 0.024445, 0.093705, 0.244955, 0.632021],
 };
 
 function getNewBuildShares(year) {
@@ -683,15 +679,15 @@ function simMaxMultFor(country) {
 // dispersion, provincial grid-capacity limits — not chip quality or compute totals
 // (those are handled separately via country shares).
 const BLOC_SHAPE_LAG = { US: 0, China: 1, Ally: 0, Other: 0 };
-// Default flat σ-offset for China relative to US under the refit σ
-// trajectory σ(t) = 1.16 + 0.51·ln(t−2021) (Epoch ≥100 H100e fit).
-// Under that fit, σ_US(2025) − σ_US(2024) ≈ 0.15 — so a constant gap
-// of 0.15 is the "1 year of US σ growth" interpretation.
-const CN_SIGMA_OFFSET_DEFAULT = 0.15;
-// Slope of the σ(t) fit, used by laggedYear to convert a σ-gap into an
-// equivalent shape-year lookup. Must match the slope used to generate
-// NEW_BUILD_ANCHORS above (0.51 under the >=100 H100e refit).
-const SIGMA_SLOPE = 0.51;
+// Default flat σ-offset for China relative to US. Set to 0.20 = the US σ
+// growth from 2024→2025 under the paper fit σ(t) = 1.629 + 0.718·ln(t−2021).
+// This is the "1 year of US σ growth" interpretation of the lag, but pinned
+// to a constant σ gap rather than a constant year offset — avoids the
+// convergence artifact where the per-year σ change shrinks as ln(t−2021)
+// saturates. Empirical 2024 σ_US−σ_CN ≈ 0.32 from Epoch ≥1K-cluster fits;
+// the 0.20 default is below that, reflecting that the Epoch dataset
+// undersamples Chinese clusters and the true σ_CN is likely tighter.
+const CN_SIGMA_OFFSET_DEFAULT = 0.20;
 // Runtime overrides:
 //   - window.__BLOC_SHAPE_LAG_MODE = "constant_year": use BLOC_SHAPE_LAG as a fixed
 //     year-lag (legacy behavior).
@@ -705,13 +701,13 @@ function laggedYear(country, year) {
     return Math.max(2023, year - (BLOC_SHAPE_LAG[country] || 0));
   }
   // Multiplicative mode (window.__cnSigmaMode === 'multiplicative'):
-  // σ_CN(t) = f · σ_US(t), where σ_US(t) = a + b·ln(t-2021) with a=1.16, b=SIGMA_SLOPE.
+  // σ_CN(t) = f · σ_US(t), where σ_US(t) = a + b·ln(t-2021), a=1.629, b=0.718.
   // Solve for shapeYear t' such that σ_US(t') = f · σ_US(t):
   //   ln(t'−2021) = (a(f−1))/b + f · ln(t−2021)
   //   t'−2021 = exp(a(f−1)/b) · (t−2021)^f
   if (typeof window !== 'undefined' && window.__cnSigmaMode === 'multiplicative') {
     const f = typeof window.__cnSigmaScale === 'number' ? window.__cnSigmaScale : 0.70;
-    const a = 1.16, b = SIGMA_SLOPE;
+    const a = 1.629, b = 0.718;
     const t = Math.max(year - 2021, 0.5);
     const shapeOffset = Math.exp(a * (f - 1) / b) * Math.pow(t, f);
     return Math.max(2023, 2021 + shapeOffset);
@@ -722,7 +718,7 @@ function laggedYear(country, year) {
     ? window.__cnSigmaOffset
     : CN_SIGMA_OFFSET_DEFAULT;
   const t = Math.max(year - 2021, 0.5);
-  const scale = Math.exp(-offset / SIGMA_SLOPE);
+  const scale = Math.exp(-offset / 0.718);
   return Math.max(2023, 2021 + scale * t);
 }
 
