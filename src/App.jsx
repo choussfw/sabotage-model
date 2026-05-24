@@ -2,8 +2,27 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 
 // Flask backend URL (AIFP Python model). MAIM posts strike-modified compute
 // timelines and receives the resulting software-progress curve per scenario.
-// Auto-switches: localhost dev hits local Flask; public deploy hits Render.
+//
+// Resolution order (first hit wins):
+//   1. Build-time env var: VITE_AIFP_BACKEND_URL (set in .env / vite config)
+//   2. Runtime localStorage override: localStorage['AIFP_BACKEND_URL']
+//      (set in browser console for ad-hoc testing without rebuilding)
+//   3. Auto-detect: localhost → local Flask; anywhere else → public Render
+//
+// Contributors who don't have backend access: set the env var to
+//   https://aifp-backend.onrender.com/api/maim-trajectory
+// in a .env file at the repo root, then `npm run build`.
 const AIFP_BACKEND_URL = (() => {
+  // (1) build-time env var
+  if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_AIFP_BACKEND_URL) {
+    return import.meta.env.VITE_AIFP_BACKEND_URL;
+  }
+  // (2) runtime localStorage override
+  if (typeof window !== "undefined" && window.localStorage) {
+    const ls = window.localStorage.getItem("AIFP_BACKEND_URL");
+    if (ls) return ls;
+  }
+  // (3) auto-detect
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
     if (host === "localhost" || host === "127.0.0.1") {
@@ -4090,7 +4109,22 @@ export default function App() {
           }
           const id = `__probe-${i}-${def}`;
           scenarios.push({ id, compute_timeline: tl, initial_progress: 0, alloc: ALLOC });
-          perDef[def] = { id, cs, effSd, threshold: T, txEnd, natEnabled };
+          // Per-probe nat-baseline: when nat is enabled, ASI(no-strike, with-nat)
+          // is the right delay anchor -- nat accelerates the no-strike baseline
+          // too, so delay vs no-nat baseline overstates nat's strike-mitigation.
+          let natBaselineId = null;
+          if (natEnabled && effSd != null) {
+            const natBaselineFn = (t) => cd.allT(t) * probeShare(t);
+            // No refinement: live UI samples baselineCompanyFn on the plain
+            // monthly grid (the nat jump gets smeared across one month). To
+            // match the live UI's reported baseline ASI we must do the same;
+            // adding refinement at effSd makes the jump sharper -> baseline
+            // ASI lands ~0.06yr earlier than live UI's value.
+            const natBaselineTL = sampleTL(natBaselineFn, null);
+            natBaselineId = `__natbaseline-${i}-${def}`;
+            scenarios.push({ id: natBaselineId, compute_timeline: natBaselineTL, initial_progress: 0, alloc: ALLOC });
+          }
+          perDef[def] = { id, cs, effSd, threshold: T, txEnd, natEnabled, natBaselineId };
         }
         probeMeta.push({ idx: i, axes: combos[i], state: s, sc, perDef });
       }
@@ -4223,11 +4257,22 @@ export default function App() {
         const ps = postScale || wartimePostScale;
         const out = {};
         if (!isAttack) {
+          // Iterate over real cluster phases (matching live UI line 3631) so the
+          // baseline milestone search is bounded by actual cluster sizes rather
+          // than a single virtual 1e12 candidate. Without this, the sweep's
+          // baseline ASI lands ~0.06yr earlier than live UI, which inflates
+          // the reported delay (visible especially under nat where the
+          // compute timeline has a step-jump at natDate).
+          const candidates = clusterCandidatesFor(Infinity, null, _country, Infinity);
           for (const key of measure) {
             const t = milestoneTargets[key];
             if (!t) { out[key] = null; continue; }
-            const res = bestCompletionV2(1e12, NOW, tlAt, t.pre, t.post, algoAt, p, eta, u, NOW, ps, ps);
-            out[key] = isFinite(res.done) ? res.done : null;
+            let bestDone = Infinity;
+            for (const cand of candidates) {
+              const res = bestCompletionV2(cand.eff, cand.avail, tlAt, t.pre, t.post, algoAt, p, eta, u, NOW, ps, ps);
+              if (res.done < bestDone) bestDone = res.done;
+            }
+            out[key] = isFinite(bestDone) ? bestDone : null;
           }
         } else {
           const candidates = clusterCandidatesFor(threshold, cs, _country, strikeDate);
@@ -4259,7 +4304,11 @@ export default function App() {
           const meta = p.perDef[def];
           const probePostScale = makePostScale(meta.natEnabled, meta.effSd);
           const ms = milestoneFor(meta.id, def, meta.threshold, probePostScale, meta.cs, meta.effSd);
-          const bl = baseline[def];
+          // When nat is enabled, anchor delay to the with-nat no-strike baseline
+          // (matches live UI convention). Otherwise use the global no-nat baseline.
+          const bl = meta.natBaselineId
+            ? milestoneFor(meta.natBaselineId, def, Infinity, probePostScale)
+            : baseline[def];
           const delays = {};
           for (const key of measure) {
             // No clamp on negative delays — nationalization can push a milestone
