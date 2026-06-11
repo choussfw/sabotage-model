@@ -460,7 +460,10 @@ const MILESTONES = [
 // === AIFP Compute Projections (AI Futures Project) ===
 // [year, globalH100e, largestCompanySharePct, companyH100e]
 // 2036-2040 extrapolated from AIFP input_data.csv experiment_compute growth
-// (~1.50x/yr, slowing slightly).
+// (~1.50x/yr, slowing slightly). 2041-2050 appended May 2026 from the AIFP
+// "Leading AI company compute" forecast actuals, to extend the modeling horizon
+// for continuous/indefinite denial (ASI can land well past 2040).
+// companyH100e = round(global * share) for the 2041-2050 rows.
 const AIFP_DATA = [
   [2022, 620000, 1.0, 6200],
   [2023, 1300000, 2.0, 25400],
@@ -481,6 +484,16 @@ const AIFP_DATA = [
   [2038, 16290000000, 16.6, 2704100000],
   [2039, 24270000000, 16.5, 4004600000],
   [2040, 35920000000, 16.5, 5926800000],
+  [2041, 55100000000, 16.5, 9091500000],
+  [2042, 78700000000, 16.4, 12906800000],
+  [2043, 109800000000, 16.3, 17897400000],
+  [2044, 150600000000, 16.1, 24246600000],
+  [2045, 204000000000, 16.0, 32640000000],
+  [2046, 273600000000, 15.8, 43228800000],
+  [2047, 363800000000, 15.7, 57116600000],
+  [2048, 480400000000, 15.6, 74942400000],
+  [2049, 630400000000, 15.4, 97081600000],
+  [2050, 822700000000, 15.3, 125873100000],
 ];
 // Country shares: TIME-VARYING. Today (~April 2026) we use Zakaria (2026a)'s
 // full demand-side estimate, with China = 13.8% (incl. offshore remote-access
@@ -614,6 +627,11 @@ const AIFP_MAX_CLUSTER = [
   [2031, 25700000], [2032, 42100000], [2033, 67200000], [2034, 105300000], [2035, 162800000],
   // Extrapolated 2036-2040 (growth slowing ~1.5x \u2192 1.3x/yr)
   [2036, 244000000], [2037, 354000000], [2038, 495600000], [2039, 669000000], [2040, 870000000],
+  // Extrapolated 2041-2050 (ratio continuing to decline ~1.29x \u2192 1.15x/yr).
+  // Used only to cap cluster SIZE post-2040; under percent-based denial the
+  // surviving-compute total is insensitive to the exact cap.
+  [2041, 1120000000], [2042, 1420000000], [2043, 1780000000], [2044, 2210000000], [2045, 2710000000],
+  [2046, 3280000000], [2047, 3920000000], [2048, 4620000000], [2049, 5380000000], [2050, 6190000000],
 ];
 function getMaxCluster(year) {
   // Linear-in-log interpolation between adjacent integer-year cap values so
@@ -667,8 +685,12 @@ function getNewBuildShares(year) {
   const hi = lo + 1;
   const a = NEW_BUILD_ANCHORS[lo];
   const b = NEW_BUILD_ANCHORS[hi];
-  const fallback = [0.05, 0.15, 0.25, 0.30, 0.20, 0.05];
-  if (!a) return b || fallback;
+  // Past the last anchor (2040), clamp to the 2040 distribution rather than a
+  // crude flat fallback: the new-build shape has stabilized (top-bucket heavy)
+  // by 2040, and percent-based continuous denial is insensitive to the exact
+  // shape anyway (it re-finds the threshold to hit the target % each month).
+  const last = NEW_BUILD_ANCHORS[2040];
+  if (!a) return b || last;
   if (!b) return a;
   const f = year - lo;
   return a.map((v, i) => v * (1 - f) + b[i] * f);
@@ -1002,7 +1024,7 @@ function existingNewByYearAndBucketForCountry(country) {
   let standaloneIdx = 0;
   for (const c of CLUSTERS) {
     if (c.country !== country) continue;
-    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2051) continue;
     if (c.year > excludeYear) continue;
     const key = c.chain >= 0 ? `c${c.chain}` : `s${standaloneIdx++}`;
     if (!chainPhases.has(key)) chainPhases.set(key, []);
@@ -1099,7 +1121,7 @@ function analyticalStrikeOutcome(country, threshold, strikeDate, continuous, cs,
     if (c.country !== country) continue;
     // Mirror points-filter: clusters with gpus < 1000 or year < 2022 or year >= 2041
     // are filtered out before reaching scPoints/scSites.
-    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2051) continue;
     if (c.year > _excludeRealPostYear) continue;
     let gpus = c.gpus;
     if (cs && cs.strikeYear != null && c.year > cs.strikeYear && c.year > NOW) {
@@ -1256,7 +1278,7 @@ if (typeof window !== 'undefined') {
     window.AIFP_DATA = AIFP_DATA;
     window.NOW = NOW;
     // Dynamic-threshold denial flag (default off — opt in for A/B testing).
-    if (window.__dynamicThresholdDenial == null) window.__dynamicThresholdDenial = false;
+    if (window.__dynamicThresholdDenial == null) window.__dynamicThresholdDenial = true;
   });
 }
 
@@ -1379,7 +1401,7 @@ function analyticalSurvivingTimeline(country, threshold, strikeDate, continuous,
   let _idx = 0;
   for (const c of CLUSTERS) {
     if (c.country !== country) continue;
-    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+    if (c.gpus < 1000 || c.year < 2022 || c.year >= 2051) continue;
     let gpus = c.gpus;
     if (cs && cs.strikeYear != null && c.year > cs.strikeYear && c.year > NOW) {
       const factor = getRecoveredSCFactor(country, c.year, cs);
@@ -1838,7 +1860,7 @@ function runTime(gpus, fEff, rate, start, p, eta, u) {
 function bestCompletion(gpus, availableYear, fEff, rate, p, eta, u, searchFrom) {
   let best = Infinity, bestStart = null;
   const startMin = Math.max(availableYear, searchFrom || NOW);
-  for(let s = startMin; s <= 2040; s += 0.02) {
+  for(let s = startMin; s <= 2050; s += 0.02) {
     const done = s + runTime(gpus, fEff, rate, s, p, eta, u);
     if(done < best) { best = done; bestStart = s; }
   }
@@ -1945,14 +1967,14 @@ function bestCompletionV2(largestGpus, largestAvailable, computeAtFn, preFLOPs, 
 
   // Coarse sweep: 0.25-year steps
   let coarseBestS = startMin;
-  for (let s = startMin; s <= 2040; s += 0.25) {
+  for (let s = startMin; s <= 2050; s += 0.25) {
     const r = evalAt(s);
     if (r.done < best) { best = r.done; bestStart = s; bestPreEnd = r.preEnd; coarseBestS = s; }
   }
 
   // Fine sweep: 0.02-year steps around the coarse best
   const fineMin = Math.max(startMin, coarseBestS - 0.5);
-  const fineMax = Math.min(2040, coarseBestS + 0.5);
+  const fineMax = Math.min(2050, coarseBestS + 0.5);
   for (let s = fineMin; s <= fineMax; s += 0.02) {
     const r = evalAt(s);
     if (r.done < best) { best = r.done; bestStart = s; bestPreEnd = r.preEnd; }
@@ -2971,7 +2993,7 @@ export default function App() {
   const [wartime, setWartime] = useState(false); // US wartime allocation OFF by default
   const [cnWartime, setCnWartime] = useState(false); // CN wartime allocation
   const [diffusion, setDiffusion] = useState(0); // off by default — opt-in to algorithmic diffusion
-  const [dynamicThresholdDenial, setDynamicThresholdDenial] = useState(false); // prototype: recompute denial threshold each month to maintain pct destroyed
+  const [dynamicThresholdDenial, setDynamicThresholdDenial] = useState(true); // default: recompute denial threshold each month so continuous denial keeps destroying the strike's % of NEW compute (vs blocking everything over a fixed H100e level)
 
   // Local fallback only: legacy MAIM saturating-speedup. Used when Python
   // backend is off/offline. When backend is on, remoteAlgoFns override this.
@@ -3154,7 +3176,7 @@ export default function App() {
   const points = useMemo(() => {
     const src = showSim ? ALL_CLUSTERS : CLUSTERS;
     return src.filter(c => {
-      if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) return false;
+      if (c.gpus < 1000 || c.year < 2022 || c.year >= 2051) return false;
       if (!showAllGroups && (c.country === "Ally" || c.country === "Other")) return false;
       return true;
     });
@@ -3190,7 +3212,7 @@ export default function App() {
     const scSimsPostStrike = showSim ? (() => {
       const scSims = generateSimulatedClusters(countryStrikes, txEnd);
       const scSimsFiltered = scSims.filter(c => {
-        if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) return false;
+        if (c.gpus < 1000 || c.year < 2022 || c.year >= 2051) return false;
         if (!showAllGroups && (c.country === "Ally" || c.country === "Other")) return false;
         return true;
       });
@@ -3283,7 +3305,7 @@ export default function App() {
       usBaselineSiteMap[key].phases.push(pt);
     });
     const usBaselineSites = Object.values(usBaselineSiteMap);
-    const usBaselineTimeline = buildComputeTimeline(usBaselineSites, NOW, 2041, 0.05);
+    const usBaselineTimeline = buildComputeTimeline(usBaselineSites, NOW, 2051, 0.05);
     const usBaselineRefCompute = usBaselineTimeline(NOW) * getCompanyShareOfNational(NOW);
     // US baseline company compute function (no nat, no attack) - used as diffusion reference
     const usBaselineCompanyFn = (t) => usBaselineTimeline(t) * getCompanyShareOfNational(t);
@@ -3331,7 +3353,7 @@ export default function App() {
         }
       });
       const sites = Object.values(siteMap);
-      const allTimeline = buildComputeTimeline(sites, NOW, 2041, 0.05);
+      const allTimeline = buildComputeTimeline(sites, NOW, 2051, 0.05);
 
       // === SC-ADJUSTED: uses scPoints for hit detection + attack timelines ===
       const allSC = scPoints.filter(pt=>pt.country===country);
@@ -3404,8 +3426,8 @@ export default function App() {
       const _pctTarget = _attackerPctMode ? _attackerPct : null;
       const survTimeline = analyticalSurvivingTimeline(
         country, effThreshold, effStrikeDate, preempt,
-        _analyticCsFor(country), _analyticTxEnd, NOW, 2041, 0.05, denialYears, _pctTarget);
-      const allScTimeline = buildComputeTimeline(scSites, NOW, 2041, 0.05);
+        _analyticCsFor(country), _analyticTxEnd, NOW, 2051, 0.05, denialYears, _pctTarget);
+      const allScTimeline = buildComputeTimeline(scSites, NOW, 2051, 0.05);
 
       // === Algo efficiency multipliers (saturating compute model) ===
       // rate(t) = baseRate * algoSpeedup(companyCompute(t) / refCompute)
@@ -3436,8 +3458,8 @@ export default function App() {
       // when the backend np.interp's between samples.
       const _sampleTimeline = (fn, refineAt) => {
         const out = [];
-        for (let y = 2024; y <= 2040.001; y += 1/12) out.push([y, Math.max(fn(y), 1)]);
-        if (refineAt && refineAt > 2024 && refineAt < 2040) {
+        for (let y = 2024; y <= 2050.001; y += 1/12) out.push([y, Math.max(fn(y), 1)]);
+        if (refineAt && refineAt > 2024 && refineAt < 2050) {
           const eps = 1e-3;
           out.push([refineAt - eps, Math.max(fn(refineAt - eps), 1)]);
           out.push([refineAt,       Math.max(fn(refineAt),       1)]);
@@ -3849,7 +3871,7 @@ export default function App() {
         preset: aifpPreset,
         overrides: aifpOverrides,
         scenarios: scenarioDefs,
-        time_range: [2017, 2040],
+        time_range: [2017, 2050],
         initial_progress: 0.0,
       }),
       signal: aborter.signal,
@@ -3929,8 +3951,8 @@ export default function App() {
     const tlInterp = (tl) => mkInterp(tl.map(pp => pp[0]), tl.map(pp => pp[1]));
     function sampleTL(fn, refineAt) {
       const out = [];
-      for (let y = 2024; y <= 2040.001; y += 1/12) out.push([y, Math.max(fn(y), 1)]);
-      if (refineAt && refineAt > 2024 && refineAt < 2040) {
+      for (let y = 2024; y <= 2050.001; y += 1/12) out.push([y, Math.max(fn(y), 1)]);
+      if (refineAt && refineAt > 2024 && refineAt < 2050) {
         out.push([refineAt - 1e-3, Math.max(fn(refineAt - 1e-3), 1)]);
         out.push([refineAt, Math.max(fn(refineAt), 1)]);
       }
@@ -3940,7 +3962,7 @@ export default function App() {
 
     // ---------- Per-country baseline timelines (no strike) ----------
     function sitesForCountry(country) {
-      const arr = ALL_CLUSTERS.filter(c => c.country === country && c.gpus >= 1000 && c.year >= 2022 && c.year < 2041);
+      const arr = ALL_CLUSTERS.filter(c => c.country === country && c.gpus >= 1000 && c.year >= 2022 && c.year < 2051);
       const map = {};
       arr.forEach((c, idx) => {
         const key = c.chain >= 0 ? "c"+c.chain : "s"+idx;
@@ -3953,7 +3975,7 @@ export default function App() {
     function countryData(country) {
       if (_countryCache[country]) return _countryCache[country];
       const { sites, phases } = sitesForCountry(country);
-      const allT = buildComputeTimeline(sites, NOW, 2041, 0.05);
+      const allT = buildComputeTimeline(sites, NOW, 2051, 0.05);
       const actualShare = (t) => getCompanyShareOfNational(t);
       const baselineCompanyFn = (t) => allT(t) * actualShare(t);
       const baselineTL = sampleTL(baselineCompanyFn, null);
@@ -4101,7 +4123,7 @@ export default function App() {
             const _pctMode = def === 'US' ? s.cnAtkPctMode : s.usAtkPctMode;
             const _pct = def === 'US' ? s.cnAtkPctDestroyed : s.usAtkPctDestroyed;
             const _pctTarget = _pctMode ? _pct : null;
-            const survT = analyticalSurvivingTimeline(def, T, effSd, def === 'US' ? s.cnAtkPreempt : s.usAtkPreempt, cs, txEnd, NOW, 2041, 0.05, denialYears, _pctTarget);
+            const survT = analyticalSurvivingTimeline(def, T, effSd, def === 'US' ? s.cnAtkPreempt : s.usAtkPreempt, cs, txEnd, NOW, 2051, 0.05, denialYears, _pctTarget);
             const attackFn = (t) => (t < effSd) ? cd.baselineCompanyFn(t) : survT(t) * probeShare(t);
             tl = sampleTL(attackFn, effSd);
           } else {
@@ -4135,7 +4157,7 @@ export default function App() {
       const CHUNK = 24;
       for (let i = baselineCount; i < scenarios.length; i += CHUNK) {
         const chunk = [...scenarios.slice(0, baselineCount), ...scenarios.slice(i, Math.min(i + CHUNK, scenarios.length))];
-        const body = { preset: aifpPresetCfg, overrides: aifpOverridesCfg, scenarios: chunk, time_range: [2017, 2040], initial_progress: 0 };
+        const body = { preset: aifpPresetCfg, overrides: aifpOverridesCfg, scenarios: chunk, time_range: [2017, 2050], initial_progress: 0 };
         const resp = await fetch(AIFP_BACKEND_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const json = await resp.json();
         for (const [id, r] of Object.entries(json.scenarios || {})) respMap[id] = r;
@@ -4154,10 +4176,10 @@ export default function App() {
       //   Baseline (no strike): effGpus is left ~unbounded; pre-training is
       //     capped to the training budget via preScale anyway.
       function frontierAvailYear(targetGpus) {
-        for (let y = Math.floor(NOW); y <= 2040; y++) {
+        for (let y = Math.floor(NOW); y <= 2050; y++) {
           if (getMaxCluster(y) >= targetGpus) return Math.max(NOW, y);
         }
-        return 2040;
+        return 2050;
       }
       // Build a per-probe training-compute extractor. Under nat (after strike),
       // the customer-inference workload is preserved at its counterfactual
@@ -4210,7 +4232,7 @@ export default function App() {
         const realPhases = [];
         for (const c of ALL_CLUSTERS) {
           if (c.country !== country) continue;
-          if (c.gpus < 1000 || c.year < 2022 || c.year >= 2041) continue;
+          if (c.gpus < 1000 || c.year < 2022 || c.year >= 2051) continue;
           const isPostStrike = c.year > sd && c.year > NOW;
           let gpus = c.gpus;
           if (isPostStrike) {
@@ -4237,7 +4259,7 @@ export default function App() {
         // Sim-cluster ceiling candidates: for each future AIFP year, the max
         // sim cluster that can be built that year (with SC reduction if cs).
         const ceilingStart = isFinite(sd) ? Math.max(Math.ceil(sd), Math.floor(NOW)) : Math.floor(NOW);
-        for (let y = ceilingStart; y <= 2040; y++) {
+        for (let y = ceilingStart; y <= 2050; y++) {
           const cm = getMaxCluster(y);
           const scF = (cs && cs.strikeYear != null) ? getPostStrikeFraction(country, y, cs) : 1.0;
           const sized = Math.round(cm * scF);
@@ -5527,12 +5549,12 @@ export default function App() {
                     <label style={{ fontSize:10, color: dynamicThresholdDenial ? "#a78bfa" : "#64748b", fontFamily:"var(--f)", display:"flex", alignItems:"center", gap:5, cursor:"pointer", marginBottom:3 }}>
                       <input type="checkbox" checked={dynamicThresholdDenial} onChange={e=>setDynamicThresholdDenial(e.target.checked)}
                         style={{ accentColor:"#a78bfa", width:11, height:11, cursor:"pointer" }} />
-                      Dynamic-threshold continuous denial (prototype)
+                      Percent-based continuous denial (default)
                     </label>
                     <div style={{ fontSize:9, color:"#475569", fontFamily:"var(--f)", paddingLeft:16, lineHeight:1.3 }}>
                       {dynamicThresholdDenial
-                        ? "Threshold recomputed each month to keep destroying the strike's % of NEW compute (rises as compute concentrates)."
-                        : "Off: fixed-H100e threshold set at strike date. On: percent-of-new-compute threshold that adjusts monthly."}
+                        ? "On (default): threshold recomputed each month so continuous denial keeps destroying the strike's % of NEW compute brought online — not everything over a fixed H100e level."
+                        : "Off (legacy): fixed-H100e threshold frozen at the strike date, so denial blocks an ever-growing share as compute concentrates."}
                     </div>
                   </div>
                 </div>
@@ -5785,13 +5807,13 @@ export default function App() {
                   <div style={{ fontSize:9, color:"#475569", fontFamily:"var(--f)", marginBottom:6, paddingLeft:16, lineHeight:1.3 }}>
                     {atk.preempt ? (
                       !isFinite(atk.denialYears)
-                        ? "Above-threshold builds prevented indefinitely (legacy preempt-forever semantics)."
-                        : `Above-threshold builds prevented for ${atk.denialYears < 1 ? `${Math.round(atk.denialYears*12)} months` : `${atk.denialYears} year${atk.denialYears===1?"":"s"}`} after strike, then normal building resumes.`
+                        ? "The strike's % of new compute stays denied indefinitely (continuous strikes): only the surviving fraction of each year's new builds comes online."
+                        : `The strike's % of new compute stays denied for ${atk.denialYears < 1 ? `${Math.round(atk.denialYears*12)} months` : `${atk.denialYears} year${atk.denialYears===1?"":"s"}`} after the strike, then normal building resumes.`
                     ) : "Strike once only: existing clusters destroyed, but future builds proceed."}
                   </div>
                   {atk.preempt && (
                     <div style={{ display:"flex", gap:4, marginBottom:8, paddingLeft:16 }}>
-                      {[0.5, 1, 2, 5].map(y => (
+                      {[0.5, 1, 2, 5, Infinity].map(y => (
                         <Btn
                           key={String(y)}
                           active={isFinite(y) ? Math.abs(atk.denialYears - y) < 0.01 : !isFinite(atk.denialYears)}
